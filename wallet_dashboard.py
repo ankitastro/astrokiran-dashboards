@@ -64,6 +64,22 @@ SELECT
      FROM pg_stat_database WHERE datname = 'astrokiran') as cache_hit_ratio;
 """
 
+# Replication Status (for read replicas)
+REPLICATION_STATUS_QUERY = """
+SELECT
+    pg_is_in_recovery() as is_replica,
+    CASE
+        WHEN pg_is_in_recovery() THEN
+            pg_wal_lsn_diff(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn())
+        ELSE 0
+    END as wal_bytes_behind,
+    CASE
+        WHEN pg_is_in_recovery() THEN
+            EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))
+        ELSE 0
+    END as seconds_since_last_transaction;
+"""
+
 # Count of REAL Users (created after Nov 13, 2025 OR recharged after Nov 13, 2025)
 ALL_USERS_COUNT_QUERY = """
 SELECT COUNT(DISTINCT uw.user_id)
@@ -144,8 +160,8 @@ LIMIT %s OFFSET %s;
 
 def get_rds_cloudwatch_metrics():
     """
-    Fetch RDS CloudWatch metrics for the last 5 minutes.
-    Returns: dict with CPU, memory, IOPS, latency, and network metrics
+    Fetch RDS CloudWatch metrics for the last 10 minutes.
+    Returns: dict with CPU, memory, IOPS, latency, replica lag, and replication metrics
     """
     if not AWS_CONFIG.get('rds_instance_id'):
         return None
@@ -160,7 +176,7 @@ def get_rds_cloudwatch_metrics():
         cloudwatch = boto3.client('cloudwatch', **session_kwargs)
 
         end_time = datetime.utcnow()
-        start_time = end_time - timedelta(minutes=5)
+        start_time = end_time - timedelta(minutes=10)  # CloudWatch data may have 5-minute delay
 
         # Metrics to fetch
         metrics_to_fetch = [
@@ -170,6 +186,7 @@ def get_rds_cloudwatch_metrics():
             ('WriteIOPS', 'Count/Second'),
             ('ReadLatency', 'Seconds'),
             ('WriteLatency', 'Seconds'),
+            ('ReplicaLag', 'Seconds'),  # Replication lag for read replicas
         ]
 
         results = {}
@@ -198,19 +215,6 @@ def get_rds_cloudwatch_metrics():
 
     except Exception as e:
         return None
-
-
-class MetricCard(Static):
-    """A card displaying a single metric"""
-
-    def __init__(self, title: str, value: str = "0", color: str = "#8fb0ee"):
-        super().__init__()
-        self.title = title
-        self.value = value
-        self.color = color
-
-    def render(self) -> str:
-        return f"[bold {self.color}]{self.title}[/]\n[bold #e9e9e9]{self.value}[/]"
 
 
 class WalletDashboard(App):
@@ -250,40 +254,62 @@ class WalletDashboard(App):
     }
 
     #refresh-label {
-        width: 1fr;
-        text-align: left;
+        width: 100%;
+        text-align: center;
         color: #bbc8e8;
         text-style: italic;
         padding: 0 1;
     }
 
-    #db-stats-label {
-        width: auto;
-        text-align: right;
-        color: #8fb0ee;
-        text-style: bold;
-        padding: 0 1;
-    }
-
-    /* --- Metrics --- */
-    #metrics {
-        height: 5;
+    /* --- DB Stats Table --- */
+    #db-stats-container {
+        height: auto;
         margin: 1 1 0 1;
     }
 
-    #rds-metrics {
-        height: 5;
-        margin: 0 1 1 1;
+    #db-stats-table {
+        height: auto;
+        border: solid #1c2440;
+        background: #0f1525;
+        text-align: center;
     }
 
-    .metric-card {
-        width: 1fr;
-        height: 5;
-        border: tall #1c2440;
-        padding: 1;
-        margin: 0 1;
-        text-align: center;
+    /* --- KPI Table --- */
+    #kpi-container {
+        height: auto;
+        margin: 1 1 0 1;
+    }
+
+    #kpi-table {
+        height: auto;
+        border: solid #1c2440;
         background: #0f1525;
+        text-align: center;
+    }
+
+    /* --- RDS Tables --- */
+    #rds-container-1 {
+        height: auto;
+        margin: 1 1 0 1;
+    }
+
+    #rds-table-1 {
+        height: auto;
+        border: solid #1c2440;
+        background: #0f1525;
+        text-align: center;
+    }
+
+    #rds-container-2 {
+        height: auto;
+        margin: 1 1 0 1;
+    }
+
+    #rds-table-2 {
+        height: auto;
+        border: solid #1c2440;
+        background: #0f1525;
+        text-align: center;
     }
 
     /* --- Main Users Table --- */
@@ -378,6 +404,7 @@ class WalletDashboard(App):
         self.all_users_data = []
         self.db_stats = (0, 0, 0, 0, 0.0)  # (total_conn, max_conn, active_queries, idle_conn, cache_hit_ratio)
         self.rds_metrics = None  # RDS CloudWatch metrics
+        self.replication_status = (False, 0, 0)  # (is_replica, wal_bytes_behind, seconds_since_last_tx)
 
         # Pagination state
         self.current_page = 1
@@ -392,30 +419,29 @@ class WalletDashboard(App):
         """Create child widgets for the app."""
         yield Header(show_clock=True)
 
-        # 1. Refresh Progress Bar with DB Stats
+        # 1. Refresh Progress Bar
         with Container(id="refresh-timer-container"):
-            with Horizontal(id="top-info-bar"):
-                yield Static(f"⚡ Auto-refresh every {self.REFRESH_SECONDS}s | Next refresh in {self.REFRESH_SECONDS}s", id="refresh-label")
-                yield Static("🔌 0/0 | ⚡ 0 active | 💤 0 idle | 📊 0% cache", id="db-stats-label")
+            yield Static(f"⚡ Auto-refresh every {self.REFRESH_SECONDS}s | Next refresh in {self.REFRESH_SECONDS}s", id="refresh-label")
             yield ProgressBar(total=self.total_ticks, show_eta=False, id="refresh-bar")
 
-        # 2. KPI Cards
-        with Container(id="metrics"):
-            with Horizontal():
-                yield MetricCard("📥 Today's Recharge", "₹0", "#54efae")
-                yield MetricCard("💎 Total Promo Cash", "₹0", "#91abec")
-                yield MetricCard("💰 Today's Revenue", "₹0", "#f0e357")
-                yield MetricCard("📤 Today's Spend", "₹0", "#5c81d7")
+        # 2. DB Stats Table
+        with Container(id="db-stats-container"):
+            yield Static("🔌 DATABASE CONNECTION STATS", classes="section-header")
+            yield DataTable(id="db-stats-table")
 
-        # 3. RDS Metrics (if configured)
-        with Container(id="rds-metrics"):
-            with Horizontal():
-                yield MetricCard("🖥️ CPU", "0%", "#f0e357")
-                yield MetricCard("💾 Memory Free", "0 GB", "#91abec")
-                yield MetricCard("📀 Read IOPS", "0", "#5c81d7")
-                yield MetricCard("📀 Write IOPS", "0", "#5c81d7")
-                yield MetricCard("⏱️ Read Latency", "0ms", "#8fb0ee")
-                yield MetricCard("⏱️ Write Latency", "0ms", "#8fb0ee")
+        # 3. KPI Metrics Table
+        with Container(id="kpi-container"):
+            yield Static("💰 TODAY'S WALLET METRICS", classes="section-header")
+            yield DataTable(id="kpi-table")
+
+        # 4. RDS CloudWatch Metrics Tables (if configured)
+        with Container(id="rds-container-1"):
+            yield Static("📊 AWS RDS CLOUDWATCH METRICS - Performance", classes="section-header")
+            yield DataTable(id="rds-table-1")
+
+        with Container(id="rds-container-2"):
+            yield Static("📊 AWS RDS METRICS - Latency & Replication Status", classes="section-header")
+            yield DataTable(id="rds-table-2")
 
         # 4. Main ALL USERS Table (takes up most of the screen)
         with Container(id="users-container"):
@@ -428,6 +454,45 @@ class WalletDashboard(App):
 
     def on_mount(self) -> None:
         """Set up tables and timer."""
+        # Setup DB Stats Table
+        db_stats_table = self.query_one("#db-stats-table", DataTable)
+        db_stats_table.add_columns(
+            "🔌 Connections (Active/Max)",
+            "⚡ Active Queries",
+            "💤 Idle Connections",
+            "📊 Cache Hit Ratio %"
+        )
+        db_stats_table.zebra_stripes = True
+
+        # Setup KPI Table
+        kpi_table = self.query_one("#kpi-table", DataTable)
+        kpi_table.add_columns(
+            "📥 Today's Recharge ₹",
+            "💎 Total Promo Cash ₹",
+            "💰 Today's Revenue ₹",
+            "📤 Today's Spend ₹"
+        )
+        kpi_table.zebra_stripes = True
+
+        # Setup RDS CloudWatch Metrics Tables
+        rds_table_1 = self.query_one("#rds-table-1", DataTable)
+        rds_table_1.add_columns(
+            "🖥️ CPU %",
+            "💾 Memory Free (GB)",
+            "📀 Read IOPS",
+            "📀 Write IOPS"
+        )
+        rds_table_1.zebra_stripes = True
+
+        rds_table_2 = self.query_one("#rds-table-2", DataTable)
+        rds_table_2.add_columns(
+            "⏱️ Read Latency (ms)",
+            "⏱️ Write Latency (ms)",
+            "🔄 WAL Bytes Behind",
+            "⏳ Time Since Last TX"
+        )
+        rds_table_2.zebra_stripes = True
+
         # Setup All Users Table with comprehensive columns
         table = self.query_one("#all-users-table", DataTable)
         table.add_columns(
@@ -495,10 +560,14 @@ class WalletDashboard(App):
             cursor.execute(ALL_USERS_COMPLETE_QUERY, (self.items_per_page, offset))
             self.all_users_data = cursor.fetchall()
 
+            # 5. Replication Status
+            cursor.execute(REPLICATION_STATUS_QUERY)
+            self.replication_status = cursor.fetchone()
+
             cursor.close()
             conn.close()
 
-            # 5. Fetch RDS CloudWatch Metrics (if configured)
+            # 6. Fetch RDS CloudWatch Metrics (if configured)
             self.rds_metrics = get_rds_cloudwatch_metrics()
 
         except Exception as e:
@@ -512,9 +581,10 @@ class WalletDashboard(App):
             self.notify("Failed to fetch wallet data", severity="error")
 
     def update_display(self) -> None:
-        # 1. Update DB Stats
+        # 1. Update DB Stats Table
         total_conn, max_conn, active_queries, idle_conn, cache_hit = self.db_stats
-        db_label = self.query_one("#db-stats-label", Static)
+        db_stats_table = self.query_one("#db-stats-table", DataTable)
+        db_stats_table.clear()
 
         # Color code connections: green if under 80%, yellow if 80-90%, red if over 90%
         usage_pct = (total_conn / max_conn * 100) if max_conn > 0 else 0
@@ -542,56 +612,96 @@ class WalletDashboard(App):
         else:
             active_color = "#f05757"
 
-        db_label.update(
-            f"🔌 [{conn_color}]{total_conn}/{max_conn}[/] ({usage_pct:.0f}%) | "
-            f"⚡ [{active_color}]{active_queries}[/] active | "
-            f"💤 {idle_conn} idle | "
-            f"📊 [{cache_color}]{cache_val:.1f}%[/] cache"
+        db_stats_table.add_row(
+            f"  [{conn_color}]{total_conn}/{max_conn}[/] ({usage_pct:.0f}%)  ",
+            f"  [{active_color}]{active_queries}[/]  ",
+            f"  {idle_conn}  ",
+            f"  [{cache_color}]{cache_val:.1f}%[/]  "
         )
 
-        # 2. Update KPIs
-        metrics = self.query(MetricCard)
+        # 2. Update KPI Table
+        kpi_table = self.query_one("#kpi-table", DataTable)
+        kpi_table.clear()
+
         today_recharge, virtual, rev_today, spend_today = self.kpi_data
+        kpi_table.add_row(
+            f"  ₹{float(today_recharge):,.2f}  ",
+            f"  ₹{float(virtual):,.2f}  ",
+            f"  ₹{float(rev_today):,.2f}  ",
+            f"  ₹{float(spend_today):,.2f}  "
+        )
 
-        metrics[0].value = f"₹{float(today_recharge):,.2f}"
-        metrics[1].value = f"₹{float(virtual):,.2f}"
-        metrics[2].value = f"₹{float(rev_today):,.2f}"
-        metrics[3].value = f"₹{float(spend_today):,.2f}"
-
-        for m in metrics:
-            m.refresh()
-
-        # 3. Update RDS Metrics (if available)
+        # 3. Update RDS Metrics Tables (if available)
         if self.rds_metrics:
-            rds_cards = self.query("#rds-metrics MetricCard")
-            if len(rds_cards) >= 6:
-                # CPU Utilization
-                cpu = self.rds_metrics.get('CPUUtilization', 0)
-                rds_cards[0].value = f"{cpu:.1f}%"
+            # Table 1: Performance metrics (CPU, Memory, IOPS)
+            rds_table_1 = self.query_one("#rds-table-1", DataTable)
+            rds_table_1.clear()
 
-                # Free Memory (convert bytes to GB)
-                mem_bytes = self.rds_metrics.get('FreeableMemory', 0)
-                mem_gb = mem_bytes / (1024**3)
-                rds_cards[1].value = f"{mem_gb:.2f} GB"
+            # CPU Utilization
+            cpu = self.rds_metrics.get('CPUUtilization', 0)
 
-                # Read IOPS
-                read_iops = self.rds_metrics.get('ReadIOPS', 0)
-                rds_cards[2].value = f"{read_iops:.0f}"
+            # Free Memory (convert bytes to GB)
+            mem_bytes = self.rds_metrics.get('FreeableMemory', 0)
+            mem_gb = mem_bytes / (1024**3)
 
-                # Write IOPS
-                write_iops = self.rds_metrics.get('WriteIOPS', 0)
-                rds_cards[3].value = f"{write_iops:.0f}"
+            # Read IOPS
+            read_iops = self.rds_metrics.get('ReadIOPS', 0)
 
-                # Read Latency (convert seconds to ms)
-                read_lat = self.rds_metrics.get('ReadLatency', 0) * 1000
-                rds_cards[4].value = f"{read_lat:.2f}ms"
+            # Write IOPS
+            write_iops = self.rds_metrics.get('WriteIOPS', 0)
 
-                # Write Latency (convert seconds to ms)
-                write_lat = self.rds_metrics.get('WriteLatency', 0) * 1000
-                rds_cards[5].value = f"{write_lat:.2f}ms"
+            rds_table_1.add_row(
+                f"  {cpu:.1f}%  ",
+                f"  {mem_gb:.2f}  ",
+                f"  {read_iops:.0f}  ",
+                f"  {write_iops:.0f}  "
+            )
 
-                for card in rds_cards:
-                    card.refresh()
+            # Table 2: Latency and Replication metrics
+            rds_table_2 = self.query_one("#rds-table-2", DataTable)
+            rds_table_2.clear()
+
+            # Read Latency (convert seconds to ms)
+            read_lat = self.rds_metrics.get('ReadLatency', 0) * 1000
+
+            # Write Latency (convert seconds to ms)
+            write_lat = self.rds_metrics.get('WriteLatency', 0) * 1000
+
+            # Replication Status from PostgreSQL (actual WAL lag, not timestamp)
+            is_replica, wal_bytes_behind, seconds_since_last_tx = self.replication_status
+
+            # Format WAL bytes behind
+            if wal_bytes_behind == 0:
+                wal_display = "[#54efae]0 bytes (synced)[/]"
+                lag_color = "#54efae"  # green
+            elif wal_bytes_behind < 1024:
+                wal_display = f"[#54efae]{wal_bytes_behind:.0f} bytes[/]"
+                lag_color = "#54efae"  # green
+            elif wal_bytes_behind < 1024 * 1024:
+                kb = wal_bytes_behind / 1024
+                wal_display = f"[#f0e357]{kb:.2f} KB[/]"
+                lag_color = "#f0e357"  # yellow
+            else:
+                mb = wal_bytes_behind / (1024 * 1024)
+                wal_display = f"[#f05757]{mb:.2f} MB[/]"
+                lag_color = "#f05757"  # red
+
+            # Format time since last transaction
+            if seconds_since_last_tx < 60:
+                time_display = f"{seconds_since_last_tx:.0f}s ago"
+            elif seconds_since_last_tx < 3600:
+                mins = seconds_since_last_tx / 60
+                time_display = f"{mins:.1f}m ago"
+            else:
+                hours = seconds_since_last_tx / 3600
+                time_display = f"{hours:.1f}h ago"
+
+            rds_table_2.add_row(
+                f"  {read_lat:.2f}  ",
+                f"  {write_lat:.2f}  ",
+                f"  {wal_display}  ",
+                f"  {time_display}  "
+            )
 
         # 4. Update All Users Table
         table = self.query_one("#all-users-table", DataTable)
