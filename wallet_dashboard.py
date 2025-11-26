@@ -277,7 +277,7 @@ class WalletDashboard(App):
 
         # Pagination state
         self.current_page = 1
-        self.items_per_page = 25  # Show 25 users per page
+        self.items_per_page = 100  # Show 100 users per page
         self.total_users = 0
 
         # Timer state
