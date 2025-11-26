@@ -8,7 +8,8 @@ Auto-refreshes every 10 seconds to show latest data.
 import os
 import psycopg2
 import re
-from datetime import datetime
+import boto3
+from datetime import datetime, timedelta
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
 from textual.widgets import Header, Footer, Static, DataTable, ProgressBar
@@ -27,6 +28,17 @@ DB_CONFIG = {
     'password': os.getenv('DB_PASSWORD')
 }
 
+# AWS Configuration for RDS CloudWatch metrics
+AWS_CONFIG = {
+    'region': os.getenv('AWS_REGION', 'ap-south-1'),
+    'rds_instance_id': os.getenv('RDS_INSTANCE_ID', ''),
+}
+
+# AWS credentials (optional - will use IAM role if not provided)
+if os.getenv('AWS_ACCESS_KEY_ID'):
+    AWS_CONFIG['aws_access_key_id'] = os.getenv('AWS_ACCESS_KEY_ID')
+    AWS_CONFIG['aws_secret_access_key'] = os.getenv('AWS_SECRET_ACCESS_KEY')
+
 # --- SQL QUERIES ---
 
 # KPI Metrics: Today's Recharge (from invoices), Virtual Cash, Today's Revenue, Today's Spends
@@ -39,6 +51,17 @@ SELECT
     (SELECT COALESCE(SUM(final_amount), 0) FROM wallet.wallet_orders
      WHERE status = 'COMPLETED' AND created_at >= CURRENT_DATE) as today_spend
 ;
+"""
+
+# Database Connection and Load Stats
+DB_CONNECTIONS_QUERY = """
+SELECT
+    (SELECT COUNT(*) FROM pg_stat_activity WHERE datname = 'astrokiran') as total_connections,
+    (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') as max_connections,
+    (SELECT COUNT(*) FROM pg_stat_activity WHERE datname = 'astrokiran' AND state = 'active' AND query NOT LIKE '%pg_stat_activity%') as active_queries,
+    (SELECT COUNT(*) FROM pg_stat_activity WHERE datname = 'astrokiran' AND state = 'idle') as idle_connections,
+    (SELECT ROUND(100.0 * sum(blks_hit) / NULLIF(sum(blks_hit) + sum(blks_read), 0), 2)
+     FROM pg_stat_database WHERE datname = 'astrokiran') as cache_hit_ratio;
 """
 
 # Count of REAL Users (created after Nov 13, 2025 OR recharged after Nov 13, 2025)
@@ -117,6 +140,66 @@ LIMIT %s OFFSET %s;
 """
 
 
+# --- AWS CloudWatch Helper Functions ---
+
+def get_rds_cloudwatch_metrics():
+    """
+    Fetch RDS CloudWatch metrics for the last 5 minutes.
+    Returns: dict with CPU, memory, IOPS, latency, and network metrics
+    """
+    if not AWS_CONFIG.get('rds_instance_id'):
+        return None
+
+    try:
+        # Create CloudWatch client
+        session_kwargs = {'region_name': AWS_CONFIG['region']}
+        if AWS_CONFIG.get('aws_access_key_id'):
+            session_kwargs['aws_access_key_id'] = AWS_CONFIG['aws_access_key_id']
+            session_kwargs['aws_secret_access_key'] = AWS_CONFIG['aws_secret_access_key']
+
+        cloudwatch = boto3.client('cloudwatch', **session_kwargs)
+
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(minutes=5)
+
+        # Metrics to fetch
+        metrics_to_fetch = [
+            ('CPUUtilization', 'Percent'),
+            ('FreeableMemory', 'Bytes'),
+            ('ReadIOPS', 'Count/Second'),
+            ('WriteIOPS', 'Count/Second'),
+            ('ReadLatency', 'Seconds'),
+            ('WriteLatency', 'Seconds'),
+        ]
+
+        results = {}
+
+        for metric_name, unit in metrics_to_fetch:
+            response = cloudwatch.get_metric_statistics(
+                Namespace='AWS/RDS',
+                MetricName=metric_name,
+                Dimensions=[
+                    {'Name': 'DBInstanceIdentifier', 'Value': AWS_CONFIG['rds_instance_id']}
+                ],
+                StartTime=start_time,
+                EndTime=end_time,
+                Period=300,  # 5 minutes
+                Statistics=['Average']
+            )
+
+            if response['Datapoints']:
+                # Get the most recent datapoint
+                datapoint = sorted(response['Datapoints'], key=lambda x: x['Timestamp'], reverse=True)[0]
+                results[metric_name] = datapoint['Average']
+            else:
+                results[metric_name] = 0
+
+        return results
+
+    except Exception as e:
+        return None
+
+
 class MetricCard(Static):
     """A card displaying a single metric"""
 
@@ -161,10 +244,24 @@ class WalletDashboard(App):
         color: #54efae;
     }
 
+    #top-info-bar {
+        height: auto;
+        width: 100%;
+    }
+
     #refresh-label {
-        text-align: right;
+        width: 1fr;
+        text-align: left;
         color: #bbc8e8;
         text-style: italic;
+        padding: 0 1;
+    }
+
+    #db-stats-label {
+        width: auto;
+        text-align: right;
+        color: #8fb0ee;
+        text-style: bold;
         padding: 0 1;
     }
 
@@ -172,6 +269,11 @@ class WalletDashboard(App):
     #metrics {
         height: 5;
         margin: 1 1 0 1;
+    }
+
+    #rds-metrics {
+        height: 5;
+        margin: 0 1 1 1;
     }
 
     .metric-card {
@@ -274,6 +376,8 @@ class WalletDashboard(App):
         # Data storage
         self.kpi_data = (0, 0, 0, 0)
         self.all_users_data = []
+        self.db_stats = (0, 0, 0, 0, 0.0)  # (total_conn, max_conn, active_queries, idle_conn, cache_hit_ratio)
+        self.rds_metrics = None  # RDS CloudWatch metrics
 
         # Pagination state
         self.current_page = 1
@@ -288,9 +392,11 @@ class WalletDashboard(App):
         """Create child widgets for the app."""
         yield Header(show_clock=True)
 
-        # 1. Refresh Progress Bar
+        # 1. Refresh Progress Bar with DB Stats
         with Container(id="refresh-timer-container"):
-            yield Static(f"⚡ Auto-refresh every {self.REFRESH_SECONDS}s | Next refresh in {self.REFRESH_SECONDS}s", id="refresh-label")
+            with Horizontal(id="top-info-bar"):
+                yield Static(f"⚡ Auto-refresh every {self.REFRESH_SECONDS}s | Next refresh in {self.REFRESH_SECONDS}s", id="refresh-label")
+                yield Static("🔌 0/0 | ⚡ 0 active | 💤 0 idle | 📊 0% cache", id="db-stats-label")
             yield ProgressBar(total=self.total_ticks, show_eta=False, id="refresh-bar")
 
         # 2. KPI Cards
@@ -301,7 +407,17 @@ class WalletDashboard(App):
                 yield MetricCard("💰 Today's Revenue", "₹0", "#f0e357")
                 yield MetricCard("📤 Today's Spend", "₹0", "#5c81d7")
 
-        # 3. Main ALL USERS Table (takes up most of the screen)
+        # 3. RDS Metrics (if configured)
+        with Container(id="rds-metrics"):
+            with Horizontal():
+                yield MetricCard("🖥️ CPU", "0%", "#f0e357")
+                yield MetricCard("💾 Memory Free", "0 GB", "#91abec")
+                yield MetricCard("📀 Read IOPS", "0", "#5c81d7")
+                yield MetricCard("📀 Write IOPS", "0", "#5c81d7")
+                yield MetricCard("⏱️ Read Latency", "0ms", "#8fb0ee")
+                yield MetricCard("⏱️ Write Latency", "0ms", "#8fb0ee")
+
+        # 4. Main ALL USERS Table (takes up most of the screen)
         with Container(id="users-container"):
             yield Static("👥 REAL USERS ONLY - Created or Recharged since Nov 13, 2025 (Real-time)", classes="section-header")
             yield DataTable(id="all-users-table")
@@ -362,21 +478,28 @@ class WalletDashboard(App):
             conn = psycopg2.connect(**DB_CONFIG)
             cursor = conn.cursor()
 
-            # 1. KPIs
+            # 1. DB Connection and Load Stats
+            cursor.execute(DB_CONNECTIONS_QUERY)
+            self.db_stats = cursor.fetchone()
+
+            # 2. KPIs
             cursor.execute(KPI_QUERY)
             self.kpi_data = cursor.fetchone()
 
-            # 2. Get total count of users for pagination
+            # 3. Get total count of users for pagination
             cursor.execute(ALL_USERS_COUNT_QUERY)
             self.total_users = cursor.fetchone()[0]
 
-            # 3. All Users with Complete Data (paginated)
+            # 4. All Users with Complete Data (paginated)
             offset = (self.current_page - 1) * self.items_per_page
             cursor.execute(ALL_USERS_COMPLETE_QUERY, (self.items_per_page, offset))
             self.all_users_data = cursor.fetchall()
 
             cursor.close()
             conn.close()
+
+            # 5. Fetch RDS CloudWatch Metrics (if configured)
+            self.rds_metrics = get_rds_cloudwatch_metrics()
 
         except Exception as e:
             self.call_from_thread(self.notify, f"DB Error: {str(e)}", severity="error")
@@ -389,7 +512,44 @@ class WalletDashboard(App):
             self.notify("Failed to fetch wallet data", severity="error")
 
     def update_display(self) -> None:
-        # 1. Update KPIs
+        # 1. Update DB Stats
+        total_conn, max_conn, active_queries, idle_conn, cache_hit = self.db_stats
+        db_label = self.query_one("#db-stats-label", Static)
+
+        # Color code connections: green if under 80%, yellow if 80-90%, red if over 90%
+        usage_pct = (total_conn / max_conn * 100) if max_conn > 0 else 0
+        if usage_pct < 80:
+            conn_color = "#54efae"  # green
+        elif usage_pct < 90:
+            conn_color = "#f0e357"  # yellow
+        else:
+            conn_color = "#f05757"  # red
+
+        # Color code cache hit ratio: green if >95%, yellow if 85-95%, red if <85%
+        cache_val = cache_hit or 0
+        if cache_val >= 95:
+            cache_color = "#54efae"  # green
+        elif cache_val >= 85:
+            cache_color = "#f0e357"  # yellow
+        else:
+            cache_color = "#f05757"  # red
+
+        # Color code active queries: green if <=5, yellow if 6-10, red if >10
+        if active_queries <= 5:
+            active_color = "#54efae"
+        elif active_queries <= 10:
+            active_color = "#f0e357"
+        else:
+            active_color = "#f05757"
+
+        db_label.update(
+            f"🔌 [{conn_color}]{total_conn}/{max_conn}[/] ({usage_pct:.0f}%) | "
+            f"⚡ [{active_color}]{active_queries}[/] active | "
+            f"💤 {idle_conn} idle | "
+            f"📊 [{cache_color}]{cache_val:.1f}%[/] cache"
+        )
+
+        # 2. Update KPIs
         metrics = self.query(MetricCard)
         today_recharge, virtual, rev_today, spend_today = self.kpi_data
 
@@ -401,7 +561,39 @@ class WalletDashboard(App):
         for m in metrics:
             m.refresh()
 
-        # 2. Update All Users Table
+        # 3. Update RDS Metrics (if available)
+        if self.rds_metrics:
+            rds_cards = self.query("#rds-metrics MetricCard")
+            if len(rds_cards) >= 6:
+                # CPU Utilization
+                cpu = self.rds_metrics.get('CPUUtilization', 0)
+                rds_cards[0].value = f"{cpu:.1f}%"
+
+                # Free Memory (convert bytes to GB)
+                mem_bytes = self.rds_metrics.get('FreeableMemory', 0)
+                mem_gb = mem_bytes / (1024**3)
+                rds_cards[1].value = f"{mem_gb:.2f} GB"
+
+                # Read IOPS
+                read_iops = self.rds_metrics.get('ReadIOPS', 0)
+                rds_cards[2].value = f"{read_iops:.0f}"
+
+                # Write IOPS
+                write_iops = self.rds_metrics.get('WriteIOPS', 0)
+                rds_cards[3].value = f"{write_iops:.0f}"
+
+                # Read Latency (convert seconds to ms)
+                read_lat = self.rds_metrics.get('ReadLatency', 0) * 1000
+                rds_cards[4].value = f"{read_lat:.2f}ms"
+
+                # Write Latency (convert seconds to ms)
+                write_lat = self.rds_metrics.get('WriteLatency', 0) * 1000
+                rds_cards[5].value = f"{write_lat:.2f}ms"
+
+                for card in rds_cards:
+                    card.refresh()
+
+        # 4. Update All Users Table
         table = self.query_one("#all-users-table", DataTable)
         table.clear()
 
@@ -449,7 +641,7 @@ class WalletDashboard(App):
                 last_activity_str
             )
 
-        # 3. Update pagination info
+        # 5. Update pagination info
         total_pages = max(1, (self.total_users + self.items_per_page - 1) // self.items_per_page)
         start_item = (self.current_page - 1) * self.items_per_page + 1
         end_item = min(self.current_page * self.items_per_page, self.total_users)
@@ -460,7 +652,7 @@ class WalletDashboard(App):
 
         self.query_one("#pagination-info", Static).update(pagination_text)
 
-        # 4. Update timestamp
+        # 6. Update timestamp
         self.query_one("#last-update", Static).update(
             f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Auto-refresh: ON ({self.REFRESH_SECONDS}s)"
         )
