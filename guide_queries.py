@@ -100,8 +100,7 @@ def get_online_guides_query():
                 AND cw.deleted_at IS NULL
             LEFT JOIN wallet.wallet_orders wo
                 ON cw.consultant_id = wo.consultant_id
-                AND wo.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata' >= CURRENT_DATE AT TIME ZONE 'Asia/Kolkata'
-                AND wo.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata' < (CURRENT_DATE + INTERVAL '1 day') AT TIME ZONE 'Asia/Kolkata'
+                AND DATE(wo.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE
             LEFT JOIN wallet.users u
                 ON wo.user_id = u.user_id
             WHERE gp.deleted_at IS NULL
@@ -191,8 +190,7 @@ def get_offline_guides_query():
                 AND cw.deleted_at IS NULL
             LEFT JOIN wallet.wallet_orders wo
                 ON cw.consultant_id = wo.consultant_id
-                AND wo.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata' >= CURRENT_DATE AT TIME ZONE 'Asia/Kolkata'
-                AND wo.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata' < (CURRENT_DATE + INTERVAL '1 day') AT TIME ZONE 'Asia/Kolkata'
+                AND DATE(wo.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE
             LEFT JOIN wallet.users u
                 ON wo.user_id = u.user_id
             WHERE gp.deleted_at IS NULL
@@ -323,8 +321,7 @@ def get_test_guides_query():
                 AND cw.deleted_at IS NULL
             LEFT JOIN wallet.wallet_orders wo
                 ON cw.consultant_id = wo.consultant_id
-                AND wo.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata' >= CURRENT_DATE AT TIME ZONE 'Asia/Kolkata'
-                AND wo.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata' < (CURRENT_DATE + INTERVAL '1 day') AT TIME ZONE 'Asia/Kolkata'
+                AND DATE(wo.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE
             LEFT JOIN wallet.users u
                 ON wo.user_id = u.user_id
             WHERE gp.deleted_at IS NULL
