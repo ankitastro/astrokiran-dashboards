@@ -262,17 +262,17 @@ class GuidesDashboard(App):
         # Setup online guides table
         online_guides_table = self.query_one("#online-guides-table", DataTable)
         online_guides_table.cursor_type = "row"
-        online_guides_table.add_columns("ID", "Name", "Chat", "Voice", "₹/min", "Earnings ₹", "PEND", "IP#", "IP Names", "COMP", "Today ₹", "REFU", "CANC")
+        online_guides_table.add_columns("ID", "Name", "Session", "Chat", "Voice", "₹/min", "Earnings ₹", "PEND", "IP#", "IP Names", "COMP", "Today ₹", "REFU", "CANC")
 
         # Setup offline guides table
         offline_guides_table = self.query_one("#offline-guides-table", DataTable)
         offline_guides_table.cursor_type = "row"
-        offline_guides_table.add_columns("ID", "Name", "Chat", "Voice", "₹/min", "Earnings ₹", "PEND", "IP#", "IP Names", "COMP", "Today ₹", "REFU", "CANC")
+        offline_guides_table.add_columns("ID", "Name", "Session", "Chat", "Voice", "₹/min", "Earnings ₹", "PEND", "IP#", "IP Names", "COMP", "Today ₹", "REFU", "CANC")
 
         # Setup test guides table
         test_guides_table = self.query_one("#test-guides-table", DataTable)
         test_guides_table.cursor_type = "row"
-        test_guides_table.add_columns("ID", "Name", "Status", "Chat", "Voice", "₹/min", "Earnings ₹", "PEND", "IP#", "IP Names", "COMP", "Today ₹", "REFU", "CANC")
+        test_guides_table.add_columns("ID", "Name", "Status", "Session", "Chat", "Voice", "₹/min", "Earnings ₹", "PEND", "IP#", "IP Names", "COMP", "Today ₹", "REFU", "CANC")
 
         # Setup promo grant spending table
         promo_grant_table = self.query_one("#promo-grant-table", DataTable)
@@ -405,10 +405,18 @@ class GuidesDashboard(App):
         online_guides_table.clear()
 
         for guide in self.online_guides_data:
-            guide_id, name, phone, chat, voice, video, skills, price_per_min, rating, consultations, earnings, today_p, today_ip_count, today_ip_customers, today_c, today_earnings, today_r, today_x = guide
+            guide_id, name, phone, chat, voice, video, skills, price_per_min, rating, consultations, earnings, today_p, today_ip_count, today_ip_customers, today_c, today_earnings, today_r, today_x, session_status = guide
+            # Format session status with color indicators
+            if session_status == 'Active':
+                session_display = "✅"
+            elif session_status == 'Expired':
+                session_display = "⚠️ Expired"
+            else:
+                session_display = "❌ None"
             online_guides_table.add_row(
                 str(guide_id),
                 name or "N/A",
+                session_display,
                 "✓" if chat else "✗",
                 "✓" if voice else "✗",
                 f"{float(price_per_min):,.2f}" if price_per_min else "0.00",
@@ -427,10 +435,18 @@ class GuidesDashboard(App):
         offline_guides_table.clear()
 
         for guide in self.offline_guides_data:
-            guide_id, name, phone, chat, voice, video, skills, price_per_min, rating, consultations, earnings, today_p, today_ip_count, today_ip_customers, today_c, today_earnings, today_r, today_x = guide
+            guide_id, name, phone, chat, voice, video, skills, price_per_min, rating, consultations, earnings, today_p, today_ip_count, today_ip_customers, today_c, today_earnings, today_r, today_x, session_status = guide
+            # Format session status with color indicators
+            if session_status == 'Active':
+                session_display = "✅"
+            elif session_status == 'Expired':
+                session_display = "⚠️ Expired"
+            else:
+                session_display = "❌ None"
             offline_guides_table.add_row(
                 str(guide_id),
                 name or "N/A",
+                session_display,
                 "✓" if chat else "✗",
                 "✓" if voice else "✗",
                 f"{float(price_per_min):,.2f}" if price_per_min else "0.00",
@@ -449,11 +465,26 @@ class GuidesDashboard(App):
         test_guides_table.clear()
 
         for guide in self.test_guides_data:
-            guide_id, name, phone, status, chat, voice, video, skills, price_per_min, rating, consultations, earnings, today_p, today_ip_count, today_ip_customers, today_c, today_earnings, today_r, today_x = guide
+            guide_id, name, phone, status, chat, voice, video, skills, price_per_min, rating, consultations, earnings, today_p, today_ip_count, today_ip_customers, today_c, today_earnings, today_r, today_x, session_status = guide
+            # Format session status with color indicators
+            if session_status == 'Active':
+                session_display = "✅"
+            elif session_status == 'Expired':
+                session_display = "⚠️ Expired"
+            else:
+                session_display = "❌ None"
+            # Format availability status
+            if status == 'ONLINE_AVAILABLE':
+                status_display = "🟢 Online"
+            elif status == 'ONLINE_BUSY':
+                status_display = "🟡 Busy"
+            else:
+                status_display = "🔴 Offline"
             test_guides_table.add_row(
                 str(guide_id),
                 name or "N/A",
-                "🟢 Online" if status == 'ONLINE_AVAILABLE' else "🔴 Offline",
+                status_display,
+                session_display,
                 "✓" if chat else "✗",
                 "✓" if voice else "✗",
                 f"{float(price_per_min):,.2f}" if price_per_min else "0.00",

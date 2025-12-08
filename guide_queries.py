@@ -48,7 +48,7 @@ def get_skills_breakdown_query():
 
 
 def get_online_guides_query():
-    """Get online guides with skills, earnings, pricing, and today's orders (IST)"""
+    """Get online guides with skills, earnings, pricing, today's orders (IST), and session status"""
     return """
         WITH guide_skills_agg AS (
             SELECT
@@ -105,6 +105,18 @@ def get_online_guides_query():
                 ON wo.user_id = u.user_id
             WHERE gp.deleted_at IS NULL
             GROUP BY gp.id
+        ),
+        guide_sessions AS (
+            SELECT
+                gp.id as guide_id,
+                MAX(us.refresh_token_exp) as token_exp
+            FROM guide.guide_profile gp
+            LEFT JOIN auth.auth_users au
+                ON REPLACE(REPLACE(gp.phone_number, '+91', ''), '+', '') = au.phone_number
+            LEFT JOIN auth.user_sessions us
+                ON au.id = us.auth_user_id AND us.user_type = 'guide'
+            WHERE gp.deleted_at IS NULL
+            GROUP BY gp.id
         )
         SELECT
             gp.id,
@@ -124,13 +136,19 @@ def get_online_guides_query():
             COALESCE(got.completed_count, 0) as today_completed,
             COALESCE(got.today_earnings, 0) as today_earnings,
             COALESCE(got.refunded_count, 0) as today_refunded,
-            COALESCE(got.cancelled_count, 0) as today_cancelled
+            COALESCE(got.cancelled_count, 0) as today_cancelled,
+            CASE
+                WHEN gsess.token_exp IS NULL THEN 'No Session'
+                WHEN gsess.token_exp < NOW() THEN 'Expired'
+                ELSE 'Active'
+            END as session_status
         FROM guide.guide_profile gp
         LEFT JOIN guide_skills_agg gsa ON gp.id = gsa.guide_id
         LEFT JOIN guide_earnings ge ON gp.id = ge.guide_id
         LEFT JOIN guide_pricing gpr ON gp.id = gpr.guide_id
         LEFT JOIN guide_orders_today got ON gp.id = got.guide_id
-        WHERE gp.availability_state = 'ONLINE_AVAILABLE'
+        LEFT JOIN guide_sessions gsess ON gp.id = gsess.guide_id
+        WHERE gp.availability_state IN ('ONLINE_AVAILABLE', 'ONLINE_BUSY')
           AND gp.deleted_at IS NULL
           AND gp.full_name NOT IN ('Aman Jain', 'Praveen')
         ORDER BY COALESCE(got.today_earnings, 0) DESC
@@ -138,7 +156,7 @@ def get_online_guides_query():
 
 
 def get_offline_guides_query():
-    """Get offline guides with skills, earnings, pricing, and today's orders (IST)"""
+    """Get offline guides with skills, earnings, pricing, today's orders (IST), and session status"""
     return """
         WITH guide_skills_agg AS (
             SELECT
@@ -195,6 +213,18 @@ def get_offline_guides_query():
                 ON wo.user_id = u.user_id
             WHERE gp.deleted_at IS NULL
             GROUP BY gp.id
+        ),
+        guide_sessions AS (
+            SELECT
+                gp.id as guide_id,
+                MAX(us.refresh_token_exp) as token_exp
+            FROM guide.guide_profile gp
+            LEFT JOIN auth.auth_users au
+                ON REPLACE(REPLACE(gp.phone_number, '+91', ''), '+', '') = au.phone_number
+            LEFT JOIN auth.user_sessions us
+                ON au.id = us.auth_user_id AND us.user_type = 'guide'
+            WHERE gp.deleted_at IS NULL
+            GROUP BY gp.id
         )
         SELECT
             gp.id,
@@ -214,13 +244,19 @@ def get_offline_guides_query():
             COALESCE(got.completed_count, 0) as today_completed,
             COALESCE(got.today_earnings, 0) as today_earnings,
             COALESCE(got.refunded_count, 0) as today_refunded,
-            COALESCE(got.cancelled_count, 0) as today_cancelled
+            COALESCE(got.cancelled_count, 0) as today_cancelled,
+            CASE
+                WHEN gsess.token_exp IS NULL THEN 'No Session'
+                WHEN gsess.token_exp < NOW() THEN 'Expired'
+                ELSE 'Active'
+            END as session_status
         FROM guide.guide_profile gp
         LEFT JOIN guide_skills_agg gsa ON gp.id = gsa.guide_id
         LEFT JOIN guide_earnings ge ON gp.id = ge.guide_id
         LEFT JOIN guide_pricing gpr ON gp.id = gpr.guide_id
         LEFT JOIN guide_orders_today got ON gp.id = got.guide_id
-        WHERE gp.availability_state != 'ONLINE_AVAILABLE'
+        LEFT JOIN guide_sessions gsess ON gp.id = gsess.guide_id
+        WHERE gp.availability_state NOT IN ('ONLINE_AVAILABLE', 'ONLINE_BUSY')
           AND gp.deleted_at IS NULL
           AND gp.full_name NOT IN ('Aman Jain', 'Praveen')
         ORDER BY COALESCE(got.today_earnings, 0) DESC
@@ -269,7 +305,7 @@ def get_promo_grant_spending_query():
 
 
 def get_test_guides_query():
-    """Get test guides (Aman Jain and Praveen) with skills, earnings, pricing, and today's orders (IST)"""
+    """Get test guides (Aman Jain and Praveen) with skills, earnings, pricing, today's orders (IST), and session status"""
     return """
         WITH guide_skills_agg AS (
             SELECT
@@ -326,6 +362,18 @@ def get_test_guides_query():
                 ON wo.user_id = u.user_id
             WHERE gp.deleted_at IS NULL
             GROUP BY gp.id
+        ),
+        guide_sessions AS (
+            SELECT
+                gp.id as guide_id,
+                MAX(us.refresh_token_exp) as token_exp
+            FROM guide.guide_profile gp
+            LEFT JOIN auth.auth_users au
+                ON REPLACE(REPLACE(gp.phone_number, '+91', ''), '+', '') = au.phone_number
+            LEFT JOIN auth.user_sessions us
+                ON au.id = us.auth_user_id AND us.user_type = 'guide'
+            WHERE gp.deleted_at IS NULL
+            GROUP BY gp.id
         )
         SELECT
             gp.id,
@@ -346,12 +394,18 @@ def get_test_guides_query():
             COALESCE(got.completed_count, 0) as today_completed,
             COALESCE(got.today_earnings, 0) as today_earnings,
             COALESCE(got.refunded_count, 0) as today_refunded,
-            COALESCE(got.cancelled_count, 0) as today_cancelled
+            COALESCE(got.cancelled_count, 0) as today_cancelled,
+            CASE
+                WHEN gsess.token_exp IS NULL THEN 'No Session'
+                WHEN gsess.token_exp < NOW() THEN 'Expired'
+                ELSE 'Active'
+            END as session_status
         FROM guide.guide_profile gp
         LEFT JOIN guide_skills_agg gsa ON gp.id = gsa.guide_id
         LEFT JOIN guide_earnings ge ON gp.id = ge.guide_id
         LEFT JOIN guide_pricing gpr ON gp.id = gpr.guide_id
         LEFT JOIN guide_orders_today got ON gp.id = got.guide_id
+        LEFT JOIN guide_sessions gsess ON gp.id = gsess.guide_id
         WHERE gp.deleted_at IS NULL
           AND gp.full_name IN ('Aman Jain', 'Praveen')
         ORDER BY COALESCE(got.today_earnings, 0) DESC

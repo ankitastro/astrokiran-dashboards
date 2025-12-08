@@ -19,10 +19,30 @@ from views.wallet import WalletView
 from views.meta import MetaView
 from views.base import ContainerConfig
 
+# Business Dashboard Views (BD-1.0 to BD-9.0)
+from views.revenue import RevenueView
+from views.users import UsersView
+from views.consultations import ConsultationsView
+from views.payments import PaymentsView
+from views.meta_campaigns import MetaCampaignsView
+from views.meta_totals import MetaTotalsView
+from views.astrologer_performance import AstrologerPerformanceView
+from views.astrologer_availability import AstrologerAvailabilityView
+
 
 # --- Register Views ---
 ViewRegistry.register(WalletView())
 ViewRegistry.register(MetaView())
+
+# Business Dashboard Views
+ViewRegistry.register(RevenueView())           # BD-1.0
+ViewRegistry.register(UsersView())             # BD-2.0
+ViewRegistry.register(ConsultationsView())     # BD-3.0
+ViewRegistry.register(PaymentsView())          # BD-4.0
+ViewRegistry.register(MetaCampaignsView())     # BD-6.0
+ViewRegistry.register(MetaTotalsView())        # BD-7.0
+ViewRegistry.register(AstrologerPerformanceView())   # BD-8.0
+ViewRegistry.register(AstrologerAvailabilityView())  # BD-9.0
 
 
 # --- Modal Screens ---
@@ -188,13 +208,19 @@ class Dashboard(App):
 
     def _tick(self) -> None:
         self.timer_ticks += 1
-        self.query_one("#timer-bar", ProgressBar).progress = self.timer_ticks
+        bar = self.query_one("#timer-bar", ProgressBar)
+        bar.progress = self.timer_ticks
         if self.timer_ticks % 10 == 0:
             secs = self.REFRESH_SECONDS - int(self.timer_ticks * 0.1)
             self.query_one("#timer-label", Static).update(f"Auto-refresh: {secs}s")
         if self.timer_ticks >= self.total_ticks:
-            self.timer_ticks = 0
+            self._reset_timer()
             self.fetch_data()
+
+    def _reset_timer(self) -> None:
+        self.timer_ticks = 0
+        self.query_one("#timer-bar", ProgressBar).progress = 0
+        self.query_one("#timer-label", Static).update(f"Auto-refresh: {self.REFRESH_SECONDS}s")
 
     def fetch_data(self) -> None:
         self.run_worker(self._fetch_worker, thread=True, exclusive=True)
@@ -229,7 +255,7 @@ class Dashboard(App):
         self.fetch_data()
 
     def action_refresh(self) -> None:
-        self.timer_ticks = 0
+        self._reset_timer()
         self.fetch_data()
 
     def action_switch_view(self) -> None:
