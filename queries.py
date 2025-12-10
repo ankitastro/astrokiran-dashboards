@@ -280,12 +280,14 @@ SELECT
 
 # Consultation Summary (BD-3.0) - Totals by mode (IST timezone)
 # BD-3.1: All, BD-3.4: Chat, BD-3.5: Call
+# Excludes deleted guides (test/developer accounts)
 CONSULTATION_SUMMARY_QUERY = """
 SELECT
     -- All consultations
     COALESCE((
         SELECT COUNT(*)
         FROM consultation.consultation c
+        JOIN guide.guide_profile gp ON c.guide_id = gp.id AND gp.deleted_at IS NULL
         WHERE c.state = 'completed'
           AND (c.completed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= %s
           AND (c.completed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= %s
@@ -293,6 +295,7 @@ SELECT
     COALESCE((
         SELECT SUM(wo.final_amount)
         FROM consultation.consultation c
+        JOIN guide.guide_profile gp ON c.guide_id = gp.id AND gp.deleted_at IS NULL
         JOIN wallet.wallet_orders wo ON c.order_id = wo.order_id
         WHERE c.state = 'completed'
           AND (c.completed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= %s
@@ -303,6 +306,7 @@ SELECT
     COALESCE((
         SELECT COUNT(*)
         FROM consultation.consultation c
+        JOIN guide.guide_profile gp ON c.guide_id = gp.id AND gp.deleted_at IS NULL
         WHERE c.state = 'completed' AND c.mode = 'chat'
           AND (c.completed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= %s
           AND (c.completed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= %s
@@ -310,6 +314,7 @@ SELECT
     COALESCE((
         SELECT SUM(wo.final_amount)
         FROM consultation.consultation c
+        JOIN guide.guide_profile gp ON c.guide_id = gp.id AND gp.deleted_at IS NULL
         JOIN wallet.wallet_orders wo ON c.order_id = wo.order_id
         WHERE c.state = 'completed' AND c.mode = 'chat'
           AND (c.completed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= %s
@@ -320,6 +325,7 @@ SELECT
     COALESCE((
         SELECT COUNT(*)
         FROM consultation.consultation c
+        JOIN guide.guide_profile gp ON c.guide_id = gp.id AND gp.deleted_at IS NULL
         WHERE c.state = 'completed' AND c.mode = 'voice'
           AND (c.completed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= %s
           AND (c.completed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= %s
@@ -327,6 +333,7 @@ SELECT
     COALESCE((
         SELECT SUM(wo.final_amount)
         FROM consultation.consultation c
+        JOIN guide.guide_profile gp ON c.guide_id = gp.id AND gp.deleted_at IS NULL
         JOIN wallet.wallet_orders wo ON c.order_id = wo.order_id
         WHERE c.state = 'completed' AND c.mode = 'voice'
           AND (c.completed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= %s
@@ -335,20 +342,32 @@ SELECT
 """
 
 # Consultation by Astrologer (BD-3.0) - Per astrologer breakdown (IST timezone)
+# Excludes deleted guides (test/developer accounts)
+# Pivoted: one row per astrologer with chat/call columns + duration stats per mode
 CONSULTATION_BY_ASTROLOGER_QUERY = """
 SELECT
+    gp.id as guide_id,
     gp.full_name as astrologer,
-    c.mode,
-    COUNT(*) as count,
-    COALESCE(SUM(wo.final_amount), 0) as amount
+    -- Chat stats
+    COUNT(*) FILTER (WHERE c.mode = 'chat') as chat_count,
+    COALESCE(SUM(wo.final_amount) FILTER (WHERE c.mode = 'chat'), 0) as chat_amount,
+    COALESCE(AVG(wo.final_amount) FILTER (WHERE c.mode = 'chat'), 0) as chat_avg_earn,
+    COALESCE(SUM(wo.minutes_ordered + wo.seconds_ordered / 60.0) FILTER (WHERE c.mode = 'chat'), 0) as chat_total_dur,
+    COALESCE(AVG(wo.minutes_ordered + wo.seconds_ordered / 60.0) FILTER (WHERE c.mode = 'chat'), 0) as chat_mean_dur,
+    -- Call stats
+    COUNT(*) FILTER (WHERE c.mode = 'voice') as call_count,
+    COALESCE(SUM(wo.final_amount) FILTER (WHERE c.mode = 'voice'), 0) as call_amount,
+    COALESCE(AVG(wo.final_amount) FILTER (WHERE c.mode = 'voice'), 0) as call_avg_earn,
+    COALESCE(SUM(wo.minutes_ordered + wo.seconds_ordered / 60.0) FILTER (WHERE c.mode = 'voice'), 0) as call_total_dur,
+    COALESCE(AVG(wo.minutes_ordered + wo.seconds_ordered / 60.0) FILTER (WHERE c.mode = 'voice'), 0) as call_mean_dur
 FROM consultation.consultation c
-JOIN guide.guide_profile gp ON c.guide_id = gp.id
+JOIN guide.guide_profile gp ON c.guide_id = gp.id AND gp.deleted_at IS NULL
 LEFT JOIN wallet.wallet_orders wo ON c.order_id = wo.order_id
 WHERE c.state = 'completed'
   AND (c.completed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= %s
   AND (c.completed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= %s
-GROUP BY gp.full_name, c.mode
-ORDER BY amount DESC;
+GROUP BY gp.id, gp.full_name
+ORDER BY (COALESCE(SUM(wo.final_amount), 0)) DESC;
 """
 
 # Payment Metrics (BD-4.0) - with date range parameters (IST timezone)

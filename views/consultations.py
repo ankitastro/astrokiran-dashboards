@@ -50,15 +50,69 @@ def format_summary_rows(data: tuple) -> list:
     ]
 
 
+def fmt_duration(minutes: float) -> str:
+    """Format duration in minutes to Xm Ys format."""
+    if minutes == 0:
+        return "-"
+    mins = int(minutes)
+    secs = int((minutes - mins) * 60)
+    if mins > 0 and secs > 0:
+        return f"{mins}m{secs}s"
+    elif mins > 0:
+        return f"{mins}m"
+    return f"{secs}s"
+
+
 def format_astrologer_row(row: tuple) -> tuple:
     """Format astrologer row."""
-    name, mode, count, amount = row
-    mode_display = "Chat" if mode == "chat" else "Call"
+    (guide_id, name,
+     chat_count, chat_amount, chat_avg_earn, chat_total, chat_mean,
+     call_count, call_amount, call_avg_earn, call_total, call_mean) = row
     return (
+        str(guide_id),
         name,
-        mode_display,
-        pad(fmt_number(int(count))),
-        pad(colorize(fmt_currency(float(amount)), GREEN))
+        pad(fmt_number(int(chat_count))),
+        pad(fmt_currency(float(chat_amount))),
+        pad(fmt_currency(float(chat_avg_earn))),
+        pad(fmt_duration(float(chat_total))),
+        pad(fmt_duration(float(chat_mean))),
+        pad(fmt_number(int(call_count))),
+        pad(fmt_currency(float(call_amount))),
+        pad(fmt_currency(float(call_avg_earn))),
+        pad(fmt_duration(float(call_total))),
+        pad(fmt_duration(float(call_mean)))
+    )
+
+
+def format_totals_row(data: list) -> tuple:
+    """Format totals row from all astrologer data."""
+    if not data:
+        return tuple()
+    # Sum up totals
+    chat_count = sum(int(r[2]) for r in data)
+    chat_amount = sum(float(r[3]) for r in data)
+    chat_total_dur = sum(float(r[5]) for r in data)
+    call_count = sum(int(r[7]) for r in data)
+    call_amount = sum(float(r[8]) for r in data)
+    call_total_dur = sum(float(r[10]) for r in data)
+    # Calculate averages
+    chat_avg = chat_amount / chat_count if chat_count > 0 else 0
+    chat_mean_dur = chat_total_dur / chat_count if chat_count > 0 else 0
+    call_avg = call_amount / call_count if call_count > 0 else 0
+    call_mean_dur = call_total_dur / call_count if call_count > 0 else 0
+    return (
+        "",
+        colorize("TOTAL", GREEN),
+        pad(colorize(fmt_number(chat_count), GREEN)),
+        pad(colorize(fmt_currency(chat_amount), GREEN)),
+        pad(colorize(fmt_currency(chat_avg), GREEN)),
+        pad(colorize(fmt_duration(chat_total_dur), GREEN)),
+        pad(colorize(fmt_duration(chat_mean_dur), GREEN)),
+        pad(colorize(fmt_number(call_count), GREEN)),
+        pad(colorize(fmt_currency(call_amount), GREEN)),
+        pad(colorize(fmt_currency(call_avg), GREEN)),
+        pad(colorize(fmt_duration(call_total_dur), GREEN)),
+        pad(colorize(fmt_duration(call_mean_dur), GREEN))
     )
 
 
@@ -82,10 +136,18 @@ class ConsultationsView(BaseView):
             ]),
             ContainerConfig("consult-astrologer-container", "BY ASTROLOGER", [
                 TableConfig("consult-astrologer-table", [
+                    "ID",
                     "Astrologer",
-                    "Mode",
-                    "Count",
-                    "Amount"
+                    "Chat#",
+                    "Chat₹",
+                    "ChatAvg₹",
+                    "ChatTot",
+                    "ChatAvg",
+                    "Call#",
+                    "Call₹",
+                    "CallAvg₹",
+                    "CallTot",
+                    "CallAvg"
                 ], cursor=True)
             ])
         ]
@@ -99,7 +161,10 @@ class ConsultationsView(BaseView):
         }
 
     def format_rows(self, data: dict) -> dict:
+        astro_rows = [format_astrologer_row(r) for r in data['by_astrologer']]
+        if data['by_astrologer']:
+            astro_rows.append(format_totals_row(data['by_astrologer']))
         return {
             'consult-summary-table': format_summary_rows(data['summary']),
-            'consult-astrologer-table': [format_astrologer_row(r) for r in data['by_astrologer']]
+            'consult-astrologer-table': astro_rows
         }
