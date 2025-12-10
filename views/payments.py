@@ -8,56 +8,67 @@ Subtasks: BD-4.1 to BD-4.4
 All support hourly/date range filtering.
 """
 
+from datetime import date
 from typing import List
 from views.base import BaseView, TableConfig, ContainerConfig
 from db import execute_query, execute_single
+from queries import PAYMENT_SUMMARY_QUERY, PAYMENT_BY_METHOD_QUERY
 from fmt import colorize, pick_color, fmt_currency, fmt_percent, fmt_number, pad, GREEN, RED
-
-
-# --- Placeholder Queries ---
-
-PAYMENT_SUMMARY_QUERY = """SELECT NULL;"""  # Count, Amount, Success Rate
-PAYMENT_BY_MODE_QUERY = """SELECT NULL;"""  # UPI, Debit, Credit, Net Banking, Wallet
 
 
 # --- Data Fetching (stateless) ---
 
 def fetch_payment_summary(start_date=None, end_date=None) -> tuple:
     """Fetch payment summary metrics."""
-    # TODO: Implement with date filtering
-    # Returns: (count, amount, success_rate)
-    return (0, 0, 0)
+    if start_date is None:
+        start_date = date.today()
+    if end_date is None:
+        end_date = date.today()
+    # Query needs: start, end repeated 5 times (for each subquery)
+    params = (start_date, end_date) * 5
+    return execute_single(PAYMENT_SUMMARY_QUERY, params) or (0, 0, 0, 0, 0)
 
 
-def fetch_by_mode(start_date=None, end_date=None) -> list:
-    """Fetch success rate by payment mode."""
-    # TODO: Implement with date filtering
-    # Returns: [(mode, count, amount, success_rate), ...]
-    return []
+def fetch_by_method(start_date=None, end_date=None) -> list:
+    """Fetch success rate by payment method."""
+    if start_date is None:
+        start_date = date.today()
+    if end_date is None:
+        end_date = date.today()
+    return execute_query(PAYMENT_BY_METHOD_QUERY, (start_date, end_date))
 
 
 # --- Row Formatting (stateless) ---
 
 def format_summary(data: tuple) -> tuple:
     """Format payment summary row."""
-    count, amount, success_rate = data
-    rate_color = pick_color(float(success_rate), 90, 95)
+    total, amount, successful, failed, pending = data
+    # Calculate success rate: successful / (successful + failed)
+    completed = int(successful) + int(failed)
+    success_rate = (float(successful) / completed * 100) if completed > 0 else 0
+    rate_color = pick_color(success_rate, 80, 95)
     return (
-        pad(fmt_number(int(count))),
+        pad(fmt_number(int(total))),
         pad(fmt_currency(float(amount))),
-        pad(colorize(fmt_percent(float(success_rate)), rate_color))
+        pad(fmt_number(int(successful))),
+        pad(fmt_number(int(failed))),
+        pad(fmt_number(int(pending))),
+        pad(colorize(fmt_percent(success_rate), rate_color))
     )
 
 
-def format_mode_row(row: tuple) -> tuple:
-    """Format payment by mode row."""
-    mode, count, amount, success_rate = row
-    rate_color = pick_color(float(success_rate), 90, 95)
+def format_method_row(row: tuple) -> tuple:
+    """Format payment by method row."""
+    method, total, successful, failed, amount = row
+    # Calculate success rate: successful / (successful + failed)
+    completed = int(successful) + int(failed)
+    success_rate = (float(successful) / completed * 100) if completed > 0 else 0
+    rate_color = pick_color(success_rate, 80, 95)
     return (
-        mode,
-        fmt_number(int(count)),
-        fmt_currency(float(amount)),
-        colorize(fmt_percent(float(success_rate)), rate_color)
+        method,
+        pad(fmt_number(int(total))),
+        pad(fmt_currency(float(amount))),
+        pad(colorize(fmt_percent(success_rate), rate_color))
     )
 
 
@@ -74,17 +85,20 @@ class PaymentsView(BaseView):
         return [
             ContainerConfig("payment-summary-container", "PAYMENT SUMMARY", [
                 TableConfig("payment-summary-table", [
-                    "Count",        # BD-4.1
+                    "Total",        # BD-4.1
                     "Amount",       # BD-4.2
-                    "Success Rate"  # BD-4.3
+                    "Success",
+                    "Failed",
+                    "Pending",
+                    "Success %"     # BD-4.3
                 ])
             ]),
-            ContainerConfig("payment-mode-container", "BY PAYMENT MODE", [
-                TableConfig("payment-mode-table", [
-                    "Mode",         # UPI, Debit, Credit, Net Banking, Wallet
+            ContainerConfig("payment-method-container", "BY PAYMENT METHOD", [
+                TableConfig("payment-method-table", [
+                    "Method",       # UPI, Debit, Credit, Net Banking, Wallet
                     "Count",
                     "Amount",
-                    "Success Rate"  # BD-4.4
+                    "Success %"     # BD-4.4
                 ], cursor=True)
             ])
         ]
@@ -94,11 +108,11 @@ class PaymentsView(BaseView):
         end = kwargs.get('end_date')
         return {
             'summary': fetch_payment_summary(start, end),
-            'by_mode': fetch_by_mode(start, end)
+            'by_method': fetch_by_method(start, end)
         }
 
     def format_rows(self, data: dict) -> dict:
         return {
             'payment-summary-table': [format_summary(data['summary'])],
-            'payment-mode-table': [format_mode_row(r) for r in data['by_mode']]
+            'payment-method-table': [format_method_row(r) for r in data['by_method']]
         }

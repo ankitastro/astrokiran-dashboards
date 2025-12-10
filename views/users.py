@@ -1,29 +1,30 @@
 """
 User Metrics View (BD-2.0)
 Subtasks: BD-2.1 to BD-2.3
-- ARPU (Average Revenue Per User)
-- Number of Registrations
-- Number of Conversions
-All support hourly/date range filtering.
+- ARPU (Average Revenue Per User) - Lifetime
+- Number of Registrations - Date range
+- Number of Conversions - Date range (first payment)
 """
 
+from datetime import date
 from typing import List
 from views.base import BaseView, TableConfig, ContainerConfig
-from db import execute_query, execute_single
+from db import execute_single
+from queries import USER_METRICS_QUERY
 from fmt import colorize, fmt_currency, fmt_number, pad, GREEN
-
-
-# --- Placeholder Queries ---
-
-USER_METRICS_QUERY = """SELECT NULL;"""  # TODO: ARPU, Registrations, Conversions
 
 
 # --- Data Fetching (stateless) ---
 
 def fetch_user_metrics(start_date=None, end_date=None) -> tuple:
     """Fetch user metrics."""
-    # TODO: Implement with date filtering
-    return (0, 0, 0)
+    if start_date is None:
+        start_date = date.today()
+    if end_date is None:
+        end_date = date.today()
+    # Query needs: start, end for registrations + start, end for conversions
+    params = (start_date, end_date, start_date, end_date)
+    return execute_single(USER_METRICS_QUERY, params) or (0, 0, 0)
 
 
 # --- Row Formatting (stateless) ---
@@ -49,11 +50,11 @@ class UsersView(BaseView):
 
     def get_containers(self) -> List[ContainerConfig]:
         return [
-            ContainerConfig("users-container", "USER METRICS", [
-                TableConfig("users-table", [
-                    "ARPU",          # BD-2.1
-                    "Registrations", # BD-2.2
-                    "Conversions"    # BD-2.3
+            ContainerConfig("user-metrics-container", "USER METRICS", [
+                TableConfig("user-metrics-table", [
+                    "ARPU (Lifetime)", # BD-2.1
+                    "Registrations",   # BD-2.2
+                    "Conversions"      # BD-2.3
                 ])
             ])
         ]
@@ -68,5 +69,5 @@ class UsersView(BaseView):
 
     def format_rows(self, data: dict) -> dict:
         return {
-            'users-table': [format_metrics(data['metrics'])]
+            'user-metrics-table': [format_metrics(data['metrics'])]
         }

@@ -8,7 +8,7 @@ from views.base import BaseView, TableConfig, ContainerConfig
 from db import execute_query, execute_single, execute_scalar
 from queries import (
     DAILY_RECHARGE_QUERY, KPI_QUERY, DB_CONNECTIONS_QUERY,
-    REPLICATION_STATUS_QUERY, ALL_USERS_COUNT_QUERY, ALL_USERS_COMPLETE_QUERY
+    REPLICATION_STATUS_QUERY, WALLET_TRANSACTIONS_QUERY, WALLET_TRANSACTIONS_COUNT_QUERY
 )
 from fmt import (
     colorize, pick_color, fmt_currency, fmt_percent,
@@ -38,14 +38,14 @@ def fetch_replication() -> tuple:
     return execute_single(REPLICATION_STATUS_QUERY) or (False, 0, 0)
 
 
-def fetch_user_count() -> int:
-    """Fetch total user count."""
-    return execute_scalar(ALL_USERS_COUNT_QUERY) or 0
+def fetch_transaction_count() -> int:
+    """Fetch total transaction count."""
+    return execute_scalar(WALLET_TRANSACTIONS_COUNT_QUERY) or 0
 
 
-def fetch_users(limit: int, offset: int) -> list:
-    """Fetch paginated user data."""
-    return execute_query(ALL_USERS_COMPLETE_QUERY, (limit, offset))
+def fetch_transactions(limit: int, offset: int) -> list:
+    """Fetch paginated wallet transactions."""
+    return execute_query(WALLET_TRANSACTIONS_QUERY, (limit, offset))
 
 
 # --- Row Formatting (stateless) ---
@@ -90,6 +90,17 @@ def format_daily_rows(data: list) -> tuple:
     return tuple(counts), tuple(amounts)
 
 
+def get_daily_headers(data: list) -> list:
+    """Get column headers from daily recharge data."""
+    headers = ["Metric"]
+    for d in data:
+        _, label, _, _ = d
+        headers.append(label)
+    while len(headers) < 8:
+        headers.append("-")
+    return headers
+
+
 def format_replication(repl: tuple) -> tuple:
     """Format replication status row."""
     is_rep, wal_bytes, secs = repl
@@ -100,15 +111,46 @@ def format_replication(repl: tuple) -> tuple:
     )
 
 
-def format_user(row: tuple) -> tuple:
-    """Format single user row."""
-    uid, name, phone, real, virt, rech_c, total, spent, orders, last, created, _ = row
-    real_f = float(real)
-    real_str = colorize(fmt_currency(real_f), "bold green" if real_f > 1000 else "green") if real_f > 0 else fmt_currency(real_f)
+def format_txn_type(txn_type: str) -> str:
+    """Format transaction type with color."""
+    if txn_type == 'ADD':
+        return colorize(txn_type, "green")
+    elif txn_type == 'SPENT':
+        return colorize(txn_type, "red")
+    elif txn_type == 'PROMOTION_GRANT':
+        return colorize("PROMO", "yellow")
+    return txn_type
+
+
+def format_transaction(row: tuple) -> tuple:
+    """Format single transaction row."""
+    txn_id, user_id, user_name, txn_type, amount, real_delta, virtual_delta, comment, created_at = row
+
+    # Format deltas with color
+    real_str = fmt_currency(float(real_delta)) if real_delta else "-"
+    if real_delta and float(real_delta) > 0:
+        real_str = colorize(real_str, "green")
+    elif real_delta and float(real_delta) < 0:
+        real_str = colorize(real_str, "red")
+
+    virtual_str = fmt_currency(float(virtual_delta)) if virtual_delta else "-"
+    if virtual_delta and float(virtual_delta) > 0:
+        virtual_str = colorize(virtual_str, "yellow")
+    elif virtual_delta and float(virtual_delta) < 0:
+        virtual_str = colorize(virtual_str, "red")
+
+    # Truncate comment
+    comment_str = (comment[:30] + "...") if comment and len(comment) > 30 else (comment or "-")
+
     return (
-        str(uid), name or "-", phone or "-", real_str,
-        fmt_currency(float(virt)), str(rech_c), fmt_currency(float(total)),
-        fmt_currency(float(spent)), str(orders), fmt_date(created), fmt_datetime(last) or "Never"
+        str(user_id),
+        user_name or "-",
+        format_txn_type(txn_type),
+        fmt_currency(float(amount)),
+        real_str,
+        virtual_str,
+        comment_str,
+        fmt_datetime(created_at) or "-"
     )
 
 
@@ -132,8 +174,8 @@ class WalletView(BaseView):
             ContainerConfig("daily-container", "DAILY RECHARGE (Last 7 Days)", [
                 TableConfig("daily-table", ["Day", "Today", "Yesterday", "2d", "3d", "4d", "5d", "6d"])
             ]),
-            ContainerConfig("users-container", "REAL USERS", [
-                TableConfig("users-table", ["ID", "Name", "Phone", "Real", "Promo", "#", "Total", "Spent", "#", "Created", "Last"], cursor=True)
+            ContainerConfig("txn-container", "WALLET TRANSACTIONS", [
+                TableConfig("txn-table", ["User ID", "Name", "Type", "Amount", "Real", "Virtual", "Comment", "Time"], cursor=True)
             ])
         ]
 
@@ -144,8 +186,8 @@ class WalletView(BaseView):
             'kpis': fetch_kpis(),
             'daily': fetch_daily_recharges(),
             'replication': fetch_replication(),
-            'total_users': fetch_user_count(),
-            'users': fetch_users(per_page, offset)
+            'total_txns': fetch_transaction_count(),
+            'transactions': fetch_transactions(per_page, offset)
         }
 
     def format_rows(self, data: dict) -> dict:
@@ -154,5 +196,11 @@ class WalletView(BaseView):
             'db-stats-table': [format_db_stats(data['db_stats'])],
             'kpi-table': [format_kpi(data['kpis'])],
             'daily-table': [counts, amounts],
-            'users-table': [format_user(u) for u in data['users']]
+            'txn-table': [format_transaction(t) for t in data['transactions']]
+        }
+
+    def get_dynamic_columns(self, data: dict) -> dict:
+        """Return dynamic column headers based on data."""
+        return {
+            'daily-table': get_daily_headers(data.get('daily', []))
         }

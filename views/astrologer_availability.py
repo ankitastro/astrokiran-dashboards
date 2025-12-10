@@ -6,31 +6,29 @@ Subtasks: BD-9.1 to BD-9.2
 All support hourly/date range filtering.
 """
 
+from datetime import date
 from typing import List
 from views.base import BaseView, TableConfig, ContainerConfig
-from db import execute_query, execute_single
+from db import execute_query, execute_scalar
+from queries import ASTROLOGER_AVAILABILITY_QUERY, LIVE_ASTROLOGERS_QUERY
 from fmt import colorize, fmt_number, pad, GREEN
-
-
-# --- Placeholder Queries ---
-
-LIVE_COUNT_QUERY = """SELECT NULL;"""  # Current live astrologers
-ONLINE_TIME_QUERY = """SELECT NULL;"""  # Per-astrologer online time
 
 
 # --- Data Fetching (stateless) ---
 
 def fetch_live_count() -> int:
     """Fetch current live astrologers count."""
-    # TODO: Implement
-    return 0
+    result = execute_scalar(LIVE_ASTROLOGERS_QUERY, ())
+    return result or 0
 
 
 def fetch_online_time(start_date=None, end_date=None) -> list:
-    """Fetch astrologer online time."""
-    # TODO: Implement with date filtering
-    # Returns: [(name, online_hours, online_minutes), ...]
-    return []
+    """Fetch astrologer online time from audit logs."""
+    if start_date is None:
+        start_date = date.today()
+    if end_date is None:
+        end_date = date.today()
+    return execute_query(ASTROLOGER_AVAILABILITY_QUERY, (start_date, end_date))
 
 
 # --- Row Formatting (stateless) ---
@@ -40,11 +38,24 @@ def format_summary(live_count: int) -> tuple:
     return (pad(colorize(fmt_number(live_count), GREEN)),)
 
 
+def format_date_range(first_date, last_date) -> str:
+    """Format date range as string."""
+    if first_date == last_date:
+        return first_date.strftime('%b %d')
+    return f"{first_date.strftime('%b %d')} - {last_date.strftime('%b %d')}"
+
+
 def format_online_time_row(row: tuple) -> tuple:
     """Format astrologer online time row."""
-    name, hours, minutes = row
-    time_str = f"{int(hours)}h {int(minutes)}m"
-    return (name, time_str)
+    name, first_online, last_online, total_minutes = row
+    hours = int(total_minutes) // 60
+    minutes = int(total_minutes) % 60
+    time_str = f"{hours}h {minutes}m"
+    return (
+        name,
+        pad(format_date_range(first_online, last_online)),
+        pad(time_str)
+    )
 
 
 # --- View Class ---
@@ -66,7 +77,8 @@ class AstrologerAvailabilityView(BaseView):
             ContainerConfig("avail-online-container", "ONLINE TIME", [
                 TableConfig("avail-online-table", [
                     "Astrologer",
-                    "Online Time"  # BD-9.1
+                    "Period",       # Date range
+                    "Online Time"   # BD-9.1
                 ], cursor=True)
             ])
         ]

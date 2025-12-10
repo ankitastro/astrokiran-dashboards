@@ -9,24 +9,23 @@ Per-astrologer metrics:
 All support hourly/date range filtering.
 """
 
+from datetime import date
 from typing import List
 from views.base import BaseView, TableConfig, ContainerConfig
 from db import execute_query
+from queries import ASTROLOGER_PERFORMANCE_QUERY
 from fmt import colorize, fmt_currency, fmt_number, pad, GREEN
-
-
-# --- Placeholder Queries ---
-
-ASTROLOGER_PERFORMANCE_QUERY = """SELECT NULL;"""  # Per-astrologer chat/call metrics
 
 
 # --- Data Fetching (stateless) ---
 
 def fetch_performance(start_date=None, end_date=None) -> list:
     """Fetch astrologer performance metrics."""
-    # TODO: Implement with date filtering
-    # Returns: [(name, chat_count, chat_amount, call_count, call_amount), ...]
-    return []
+    if start_date is None:
+        start_date = date.today()
+    if end_date is None:
+        end_date = date.today()
+    return execute_query(ASTROLOGER_PERFORMANCE_QUERY, (start_date, end_date))
 
 
 # --- Row Formatting (stateless) ---
@@ -37,11 +36,11 @@ def format_performance_row(row: tuple) -> tuple:
     total_amount = float(chat_amount) + float(call_amount)
     return (
         name,
-        fmt_number(int(chat_count)),           # BD-8.1
-        fmt_currency(float(chat_amount)),      # BD-8.2
-        fmt_number(int(call_count)),           # BD-8.3
-        fmt_currency(float(call_amount)),      # BD-8.4
-        colorize(fmt_currency(total_amount), GREEN)
+        pad(fmt_number(int(chat_count))),           # BD-8.1
+        pad(fmt_currency(float(chat_amount))),      # BD-8.2
+        pad(fmt_number(int(call_count))),           # BD-8.3
+        pad(fmt_currency(float(call_amount))),      # BD-8.4
+        pad(colorize(fmt_currency(total_amount), GREEN))
     )
 
 
@@ -60,10 +59,10 @@ class AstrologerPerformanceView(BaseView):
                 TableConfig("astro-perf-table", [
                     "Astrologer",
                     "Chat #",      # BD-8.1
-                    "Chat ₹",      # BD-8.2
+                    "Chat Rs.",    # BD-8.2
                     "Call #",      # BD-8.3
-                    "Call ₹",      # BD-8.4
-                    "Total ₹"
+                    "Call Rs.",    # BD-8.4
+                    "Total Rs."
                 ], cursor=True)
             ])
         ]

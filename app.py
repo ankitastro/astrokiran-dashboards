@@ -18,6 +18,7 @@ from views.registry import ViewRegistry
 from views.wallet import WalletView
 from views.meta import MetaView
 from views.base import ContainerConfig
+from components.date_range import DateRangeSelector, DateRange, today
 
 # Business Dashboard Views (BD-1.0 to BD-9.0)
 from views.revenue import RevenueView
@@ -48,24 +49,51 @@ ViewRegistry.register(AstrologerAvailabilityView())  # BD-9.0
 # --- Modal Screens ---
 
 class ViewSelectorScreen(ModalScreen):
-    """Modal for selecting views."""
+    """Modal for selecting views with arrow key navigation."""
 
     CSS = """
     ViewSelectorScreen { align: center middle; }
-    #dialog { width: 35; height: auto; border: thick #32416a; background: #0f1525; padding: 1 2; }
+    #dialog { width: 40; height: auto; border: thick #32416a; background: #0f1525; padding: 1 2; }
     #title { text-align: center; text-style: bold; color: #8fb0ee; margin-bottom: 1; }
-    .btn { width: 100%; margin-bottom: 1; }
+    #hint { text-align: center; color: #788bc9; text-style: italic; }
+    #view-table { height: auto; max-height: 20; }
     """
 
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("enter", "select", "Select"),
+    ]
+
     def compose(self) -> ComposeResult:
+        self.views = ViewRegistry.all()
         with Container(id="dialog"):
             yield Static("Select View", id="title")
-            for view in ViewRegistry.all():
-                yield Button(f"{view.icon} {view.name}", id=f"btn-{view.view_id}", classes="btn")
+            yield DataTable(id="view-table")
+            yield Static("↑↓ Navigate  Enter Select  Esc Cancel", id="hint")
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        view_id = event.button.id.replace("btn-", "")
-        self.dismiss(view_id)
+    def on_mount(self) -> None:
+        table = self.query_one("#view-table", DataTable)
+        table.add_columns("", "View")
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+        for view in self.views:
+            table.add_row(view.icon, view.name)
+        table.focus()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        self._select_current()
+
+    def action_select(self) -> None:
+        self._select_current()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def _select_current(self) -> None:
+        table = self.query_one("#view-table", DataTable)
+        idx = table.cursor_row
+        if idx is not None and idx < len(self.views):
+            self.dismiss(self.views[idx].view_id)
 
 
 class FilePickerScreen(ModalScreen):
@@ -147,9 +175,15 @@ def setup_table(table: DataTable, columns: list, cursor: bool = False) -> None:
         table.cursor_type = "row"
 
 
-def update_table(table: DataTable, rows: list) -> None:
-    """Update table with new rows."""
+def update_table(table: DataTable, rows: list, columns: list = None) -> None:
+    """Update table with new rows, optionally updating columns."""
     table.clear()
+    if columns:
+        # Clear existing columns - table.columns returns ColumnKey objects directly
+        col_keys = list(table.columns)
+        for key in col_keys:
+            table.remove_column(key)
+        table.add_columns(*columns)
     for row in rows:
         table.add_row(*row)
 
@@ -166,6 +200,7 @@ class Dashboard(App):
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh"),
         ("d", "switch_view", "Views"),
+        ("f", "date_filter", "Date Filter"),
         ("l", "load_csv", "Load CSV"),
         ("n", "next_page", "Next"),
         ("p", "prev_page", "Prev"),
@@ -180,9 +215,12 @@ class Dashboard(App):
         self.csv_path = None
         self.timer_ticks = 0
         self.total_ticks = int(self.REFRESH_SECONDS / 0.1)
+        self.date_range: DateRange = today()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
+        with Container(id="filter-container"):
+            yield Static(f"📅 {self.date_range}", id="date-range-label")
         with Container(id="timer-container"):
             yield Static(f"Auto-refresh: {self.REFRESH_SECONDS}s", id="timer-label")
             yield ProgressBar(total=self.total_ticks, show_eta=False, id="timer-bar")
@@ -227,9 +265,12 @@ class Dashboard(App):
 
     def _fetch_worker(self) -> dict:
         view = ViewRegistry.get(self.current_view_id)
+        start, end = self.date_range.as_tuple()
         if self.current_view_id == "wallet":
             return view.fetch_data(page=self.page, per_page=self.per_page)
-        return view.fetch_data(csv_path=self.csv_path)
+        elif self.current_view_id == "meta":
+            return view.fetch_data(csv_path=self.csv_path)
+        return view.fetch_data(start_date=start, end_date=end)
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         if event.state == WorkerState.SUCCESS:
@@ -239,9 +280,14 @@ class Dashboard(App):
     def _update_display(self) -> None:
         view = ViewRegistry.get(self.current_view_id)
         rows = view.format_rows(self.view_data)
+        # Get dynamic columns if the view supports it
+        dynamic_cols = {}
+        if hasattr(view, 'get_dynamic_columns'):
+            dynamic_cols = view.get_dynamic_columns(self.view_data)
         for table_id, table_rows in rows.items():
             table = self.query_one(f"#{table_id}", DataTable)
-            update_table(table, table_rows)
+            columns = dynamic_cols.get(table_id)
+            update_table(table, table_rows, columns)
         self.query_one("#last-update", Static).update(
             f"Last updated: {datetime.now().strftime('%H:%M:%S')}"
         )
@@ -263,6 +309,15 @@ class Dashboard(App):
             if view_id:
                 self._switch_to_view(view_id)
         self.push_screen(ViewSelectorScreen(), handle)
+
+    def action_date_filter(self) -> None:
+        def handle(result: Optional[DateRange]) -> None:
+            if result:
+                self.date_range = result
+                self.query_one("#date-range-label", Static).update(f"📅 {self.date_range}")
+                self._reset_timer()
+                self.fetch_data()
+        self.push_screen(DateRangeSelector(self.date_range), handle)
 
     def action_load_csv(self) -> None:
         def handle(path: Optional[str]) -> None:

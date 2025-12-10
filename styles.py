@@ -7,6 +7,20 @@ Screen {
     background: #0a0e1b;
 }
 
+/* Date filter bar */
+#filter-container {
+    height: auto;
+    margin: 0 1;
+    padding: 0 1;
+    background: #131a2c;
+}
+
+#date-range-label {
+    text-align: center;
+    color: #54efae;
+    text-style: bold;
+}
+
 /* Timer bar */
 #timer-container {
     height: auto;
@@ -28,7 +42,8 @@ Screen {
 }
 
 /* View containers */
-#view-wallet, #view-meta {
+#view-wallet, #view-meta, #view-revenue, #view-users, #view-consultations,
+#view-payments, #view-meta-campaigns, #view-meta-totals, #view-astro-perf, #view-astro-avail {
     height: 1fr;
 }
 
@@ -78,8 +93,8 @@ DataTable > .datatable--cursor {
     margin: 0 1;
 }
 
-/* Users and ads containers - take remaining space */
-#users-container, #meta-ads-container {
+/* Transactions and ads containers - take remaining space */
+#txn-container, #meta-ads-container {
     height: 1fr;
     border: tall #32416a;
     margin: 1;
@@ -87,7 +102,7 @@ DataTable > .datatable--cursor {
     background: #0f1525;
 }
 
-#users-table, #meta-ads-table {
+#txn-table, #meta-ads-table {
     height: 1fr;
 }
 
@@ -103,4 +118,23 @@ DataTable > .datatable--cursor {
 .hidden {
     display: none;
 }
+"""
+
+# Legacy CSS for screens.py (wallet_dashboard.py compatibility)
+VIEW_SELECTOR_CSS = """
+ViewSelectorScreen { align: center middle; }
+#view-dialog { width: 35; height: auto; border: thick #32416a; background: #0f1525; padding: 1 2; }
+#view-dialog-title { text-align: center; text-style: bold; color: #8fb0ee; margin-bottom: 1; }
+.view-option { width: 100%; margin-bottom: 1; }
+"""
+
+FILE_PICKER_CSS = """
+FilePickerScreen { align: center middle; }
+#file-dialog { width: 80; height: 20; border: thick #32416a; background: #0f1525; padding: 1 2; }
+#file-dialog-title { text-align: center; text-style: bold; color: #8fb0ee; margin-bottom: 1; }
+#file-list-container { height: 12; }
+#file-list { height: 100%; }
+#file-buttons { align: center middle; height: auto; margin-top: 1; }
+#file-buttons Button { margin: 0 1; }
+#file-hint { text-align: center; color: #788bc9; text-style: italic; margin-top: 1; }
 """
