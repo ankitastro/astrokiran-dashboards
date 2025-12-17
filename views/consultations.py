@@ -12,8 +12,11 @@ from datetime import date
 from typing import List
 from views.base import BaseView, TableConfig, ContainerConfig
 from db import execute_single, execute_query
-from queries import CONSULTATION_SUMMARY_QUERY, CONSULTATION_BY_ASTROLOGER_QUERY
-from fmt import colorize, fmt_currency, fmt_number, pad, GREEN
+from queries import (
+    CONSULTATION_SUMMARY_QUERY, CONSULTATION_BY_ASTROLOGER_QUERY,
+    CONSULTATION_REQUESTS_QUERY, CONSULTATION_PERFORMANCE_QUERY
+)
+from fmt import colorize, fmt_currency, fmt_number, fmt_percent, pick_color, pad, GREEN, RED, YELLOW
 
 
 # --- Data Fetching (stateless) ---
@@ -36,6 +39,24 @@ def fetch_by_astrologer(start_date=None, end_date=None) -> list:
     if end_date is None:
         end_date = date.today()
     return execute_query(CONSULTATION_BY_ASTROLOGER_QUERY, (start_date, end_date))
+
+
+def fetch_requests(start_date=None, end_date=None) -> list:
+    """Fetch consultation requests by astrologer."""
+    if start_date is None:
+        start_date = date.today()
+    if end_date is None:
+        end_date = date.today()
+    return execute_query(CONSULTATION_REQUESTS_QUERY, (start_date, end_date))
+
+
+def fetch_connection_performance(start_date=None, end_date=None) -> tuple:
+    """Fetch connection performance metrics."""
+    if start_date is None:
+        start_date = date(2025, 12, 5)
+    if end_date is None:
+        end_date = date.today()
+    return execute_single(CONSULTATION_PERFORMANCE_QUERY, (start_date, end_date)) or (0, 0, 0, 0, 0, 0, 0, 0)
 
 
 # --- Row Formatting (stateless) ---
@@ -116,6 +137,57 @@ def format_totals_row(data: list) -> tuple:
     )
 
 
+def format_request_row(row: tuple) -> tuple:
+    """Format consultation request row."""
+    guide_id, name, total, accepted, rejected, timed_out, completed = row
+    # Acceptance rate = accepted / total * 100
+    accept_rate = (accepted / total * 100) if total > 0 else 0
+    rate_color = pick_color(accept_rate, 50, 80)
+    return (
+        str(guide_id),
+        name or "-",
+        pad(fmt_number(total)),
+        pad(colorize(fmt_number(accepted), GREEN)),
+        pad(colorize(fmt_number(rejected), RED)),
+        pad(fmt_number(timed_out)),
+        pad(fmt_number(completed)),
+        pad(colorize(fmt_percent(accept_rate), rate_color))
+    )
+
+
+def format_performance_rows(data: tuple) -> list:
+    """Format connection performance metrics as rows."""
+    (total_attempts, total_successes, success_rate, successful_sessions,
+     avg_attempts, first_try_success, first_try_rate, avg_minutes) = data
+
+    # Row 1: Overall stats
+    success_color = pick_color(float(success_rate or 0), 40, 60)
+    row1 = (
+        "Overall",
+        pad(fmt_number(int(total_attempts or 0))),
+        pad(colorize(fmt_number(int(total_successes or 0)), GREEN)),
+        pad(colorize(fmt_percent(float(success_rate or 0)), success_color)),
+        "-",
+        "-",
+        "-"
+    )
+
+    # Row 2: Session stats
+    first_try_color = pick_color(float(first_try_rate or 0), 50, 70)
+    attempts_color = pick_color(float(avg_attempts or 0), 3, 2, reverse=True)
+    row2 = (
+        "Sessions",
+        pad(fmt_number(int(successful_sessions or 0))),
+        pad(colorize(fmt_number(int(first_try_success or 0)), GREEN)),
+        pad(colorize(fmt_percent(float(first_try_rate or 0)), first_try_color)),
+        pad(colorize(f"{float(avg_attempts or 0):.1f}", attempts_color)),
+        pad(f"{float(avg_minutes or 0):.1f}m"),
+        "-"
+    )
+
+    return [row1, row2]
+
+
 # --- View Class ---
 
 class ConsultationsView(BaseView):
@@ -134,6 +206,17 @@ class ConsultationsView(BaseView):
                     "Amount"
                 ])
             ]),
+            ContainerConfig("consult-perf-container", "CONNECTION PERFORMANCE (Since Dec 5)", [
+                TableConfig("consult-perf-table", [
+                    "Metric",
+                    "Attempts",
+                    "Success",
+                    "Rate",
+                    "Avg Tries",
+                    "Avg Time",
+                    "-"
+                ])
+            ]),
             ContainerConfig("consult-astrologer-container", "BY ASTROLOGER", [
                 TableConfig("consult-astrologer-table", [
                     "ID",
@@ -149,6 +232,18 @@ class ConsultationsView(BaseView):
                     "CallTot",
                     "CallAvg"
                 ], cursor=True)
+            ]),
+            ContainerConfig("consult-requests-container", "REQUEST ACCEPTANCE", [
+                TableConfig("consult-requests-table", [
+                    "ID",
+                    "Astrologer",
+                    "Requests",
+                    "Accepted",
+                    "Rejected",
+                    "Timeout",
+                    "Completed",
+                    "Accept%"
+                ], cursor=True)
             ])
         ]
 
@@ -157,7 +252,9 @@ class ConsultationsView(BaseView):
         end = kwargs.get('end_date')
         return {
             'summary': fetch_consultation_summary(start, end),
-            'by_astrologer': fetch_by_astrologer(start, end)
+            'performance': fetch_connection_performance(start, end),
+            'by_astrologer': fetch_by_astrologer(start, end),
+            'requests': fetch_requests(start, end)
         }
 
     def format_rows(self, data: dict) -> dict:
@@ -166,5 +263,7 @@ class ConsultationsView(BaseView):
             astro_rows.append(format_totals_row(data['by_astrologer']))
         return {
             'consult-summary-table': format_summary_rows(data['summary']),
-            'consult-astrologer-table': astro_rows
+            'consult-perf-table': format_performance_rows(data['performance']),
+            'consult-astrologer-table': astro_rows,
+            'consult-requests-table': [format_request_row(r) for r in data['requests']]
         }

@@ -8,7 +8,8 @@ from views.base import BaseView, TableConfig, ContainerConfig
 from db import execute_query, execute_single, execute_scalar
 from queries import (
     DAILY_RECHARGE_QUERY, KPI_QUERY, DB_CONNECTIONS_QUERY,
-    REPLICATION_STATUS_QUERY, WALLET_TRANSACTIONS_QUERY, WALLET_TRANSACTIONS_COUNT_QUERY
+    REPLICATION_STATUS_QUERY, WALLET_TRANSACTIONS_QUERY, WALLET_TRANSACTIONS_COUNT_QUERY,
+    WALLET_CREATION_QUERY
 )
 from fmt import (
     colorize, pick_color, fmt_currency, fmt_percent,
@@ -25,7 +26,12 @@ def fetch_db_stats() -> tuple:
 
 def fetch_kpis() -> tuple:
     """Fetch today's KPI metrics."""
-    return execute_single(KPI_QUERY) or (0, 0, 0, 0)
+    return execute_single(KPI_QUERY) or (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+
+def fetch_wallet_creation() -> list:
+    """Fetch daily wallet creation stats (last 7 days)."""
+    return execute_query(WALLET_CREATION_QUERY)
 
 
 def fetch_daily_recharges() -> list:
@@ -62,10 +68,70 @@ def format_db_stats(stats: tuple) -> tuple:
     )
 
 
-def format_kpi(kpi: tuple) -> tuple:
-    """Format KPI row."""
-    recharge, virtual, revenue, spend = kpi
-    return tuple(pad(fmt_currency(float(v))) for v in kpi)
+def format_kpi_row1(kpi: tuple) -> tuple:
+    """Format KPI row 1 - Users & Payments."""
+    (total_users, total_customers, new_paying, old_paying, total_payment,
+     repeat_users, repeat_rate, total_consults, new_consults, old_consults,
+     total_consult_amt, new_consult_amt, old_consult_amt) = kpi
+    rate_color = pick_color(float(repeat_rate or 0), 10, 20)
+    return (
+        pad(fmt_number(int(total_users))),
+        pad(colorize(fmt_number(int(total_customers)), "green")),
+        pad(colorize(fmt_number(int(new_paying)), "green")),
+        pad(fmt_number(int(old_paying))),
+        pad(colorize(fmt_currency(float(total_payment)), "green")),
+        pad(colorize(fmt_number(int(repeat_users)), "green")),
+        pad(colorize(fmt_percent(float(repeat_rate or 0)), rate_color))
+    )
+
+
+def format_kpi_row2(kpi: tuple) -> tuple:
+    """Format KPI row 2 - Consultations count."""
+    (total_users, total_customers, new_paying, old_paying, total_payment,
+     repeat_users, repeat_rate, total_consults, new_consults, old_consults,
+     total_consult_amt, new_consult_amt, old_consult_amt) = kpi
+    return (
+        "",
+        pad(colorize(fmt_number(int(total_consults)), "green")),
+        pad(colorize(fmt_number(int(new_consults)), "green")),
+        pad(fmt_number(int(old_consults))),
+        "",
+        "",
+        ""
+    )
+
+
+def format_kpi_row3(kpi: tuple) -> tuple:
+    """Format KPI row 3 - Consultation amounts."""
+    (total_users, total_customers, new_paying, old_paying, total_payment,
+     repeat_users, repeat_rate, total_consults, new_consults, old_consults,
+     total_consult_amt, new_consult_amt, old_consult_amt) = kpi
+    return (
+        "",
+        pad(colorize(fmt_currency(float(total_consult_amt)), "green")),
+        pad(colorize(fmt_currency(float(new_consult_amt)), "green")),
+        pad(fmt_currency(float(old_consult_amt))),
+        "",
+        "",
+        ""
+    )
+
+
+def format_wallet_creation_row(data: list) -> tuple:
+    """Format wallet creation row (like daily recharge)."""
+    counts = ["# Wallets"] + [pad(colorize(str(d[2]), pick_color(d[2], 50, 100))) for d in data]
+    while len(counts) < 8:
+        counts.append(pad("-"))
+    return tuple(counts)
+
+
+def format_wallet_deleted_row(data: list) -> tuple:
+    """Format wallet deleted row."""
+    from fmt import RED
+    counts = ["# Deleted"] + [pad(colorize(str(d[3]), RED) if d[3] > 0 else "-") for d in data]
+    while len(counts) < 8:
+        counts.append(pad("-"))
+    return tuple(counts)
 
 
 def format_daily_count(day_data: tuple) -> str:
@@ -124,7 +190,7 @@ def format_txn_type(txn_type: str) -> str:
 
 def format_transaction(row: tuple) -> tuple:
     """Format single transaction row."""
-    txn_id, user_id, user_name, txn_type, amount, real_delta, virtual_delta, comment, created_at = row
+    txn_id, user_id, phone, txn_type, amount, real_delta, virtual_delta, comment, created_at = row
 
     # Format deltas with color
     real_str = fmt_currency(float(real_delta)) if real_delta else "-"
@@ -144,7 +210,7 @@ def format_transaction(row: tuple) -> tuple:
 
     return (
         str(user_id),
-        user_name or "-",
+        phone or "-",
         format_txn_type(txn_type),
         fmt_currency(float(amount)),
         real_str,
@@ -168,14 +234,14 @@ class WalletView(BaseView):
             ContainerConfig("db-stats-container", "DATABASE CONNECTION STATS", [
                 TableConfig("db-stats-table", ["Connections", "Active", "Idle", "Cache Hit %"])
             ]),
-            ContainerConfig("kpi-container", "TODAY'S WALLET METRICS", [
-                TableConfig("kpi-table", ["Recharge", "Promo Cash", "Revenue", "Spend"])
+            ContainerConfig("kpi-container", "METRICS (Since Dec 5)", [
+                TableConfig("kpi-table", ["Users", "Total", "New", "Old", "Amount", "Repeat", "Repeat %"])
             ]),
-            ContainerConfig("daily-container", "DAILY RECHARGE (Last 7 Days)", [
-                TableConfig("daily-table", ["Day", "Today", "Yesterday", "2d", "3d", "4d", "5d", "6d"])
+            ContainerConfig("daily-container", "DAILY STATS (Last 7 Days)", [
+                TableConfig("daily-table", ["Metric", "Today", "Yesterday", "2d", "3d", "4d", "5d", "6d"])
             ]),
             ContainerConfig("txn-container", "WALLET TRANSACTIONS", [
-                TableConfig("txn-table", ["User ID", "Name", "Type", "Amount", "Real", "Virtual", "Comment", "Time"], cursor=True)
+                TableConfig("txn-table", ["User ID", "Phone", "Type", "Amount", "Real", "Virtual", "Comment", "Time"], cursor=True)
             ])
         ]
 
@@ -184,6 +250,7 @@ class WalletView(BaseView):
         return {
             'db_stats': fetch_db_stats(),
             'kpis': fetch_kpis(),
+            'wallet_creation': fetch_wallet_creation(),
             'daily': fetch_daily_recharges(),
             'replication': fetch_replication(),
             'total_txns': fetch_transaction_count(),
@@ -192,10 +259,17 @@ class WalletView(BaseView):
 
     def format_rows(self, data: dict) -> dict:
         counts, amounts = format_daily_rows(data['daily'])
+        wallets = format_wallet_creation_row(data['wallet_creation'])
+        deleted = format_wallet_deleted_row(data['wallet_creation'])
+        kpis = data['kpis']
         return {
             'db-stats-table': [format_db_stats(data['db_stats'])],
-            'kpi-table': [format_kpi(data['kpis'])],
-            'daily-table': [counts, amounts],
+            'kpi-table': [
+                ("Payments",) + format_kpi_row1(kpis)[1:],
+                ("Consults #",) + format_kpi_row2(kpis)[1:],
+                ("Consults ₹",) + format_kpi_row3(kpis)[1:]
+            ],
+            'daily-table': [wallets, deleted, counts, amounts],
             'txn-table': [format_transaction(t) for t in data['transactions']]
         }
 

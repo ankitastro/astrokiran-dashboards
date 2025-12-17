@@ -43,7 +43,7 @@ Screen {
 
 /* View containers */
 #view-wallet, #view-meta, #view-revenue, #view-users, #view-consultations,
-#view-payments, #view-meta-campaigns, #view-meta-totals, #view-astro-perf, #view-astro-avail {
+#view-payments, #view-meta-campaigns, #view-meta-totals, #view-astro-perf, #view-astro-avail, #view-guides {
     height: 1fr;
 }
 

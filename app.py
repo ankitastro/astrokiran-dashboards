@@ -29,6 +29,7 @@ from views.meta_campaigns import MetaCampaignsView
 from views.meta_totals import MetaTotalsView
 from views.astrologer_performance import AstrologerPerformanceView
 from views.astrologer_availability import AstrologerAvailabilityView
+from views.guides import GuidesView
 
 
 # --- Register Views ---
@@ -44,6 +45,7 @@ ViewRegistry.register(MetaCampaignsView())     # BD-6.0
 ViewRegistry.register(MetaTotalsView())        # BD-7.0
 ViewRegistry.register(AstrologerPerformanceView())   # BD-8.0
 ViewRegistry.register(AstrologerAvailabilityView())  # BD-9.0
+ViewRegistry.register(GuidesView())                  # Guides Dashboard
 
 
 # --- Modal Screens ---
