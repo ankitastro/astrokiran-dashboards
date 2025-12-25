@@ -9,7 +9,7 @@ from db import execute_query, execute_single, execute_scalar
 from queries import (
     DAILY_RECHARGE_QUERY, KPI_QUERY, DB_CONNECTIONS_QUERY,
     REPLICATION_STATUS_QUERY, WALLET_TRANSACTIONS_QUERY, WALLET_TRANSACTIONS_COUNT_QUERY,
-    WALLET_CREATION_QUERY
+    WALLET_CREATION_QUERY, ADD_COMPARISON_QUERY
 )
 from fmt import (
     colorize, pick_color, fmt_currency, fmt_percent,
@@ -32,6 +32,11 @@ def fetch_kpis() -> tuple:
 def fetch_wallet_creation() -> list:
     """Fetch daily wallet creation stats (last 7 days)."""
     return execute_query(WALLET_CREATION_QUERY)
+
+
+def fetch_add_comparison() -> list:
+    """Fetch ADD transaction comparison (7 days with by-now counts)."""
+    return execute_query(ADD_COMPARISON_QUERY) or []
 
 
 def fetch_daily_recharges() -> list:
@@ -117,9 +122,17 @@ def format_kpi_row3(kpi: tuple) -> tuple:
     )
 
 
+def format_phone_entries_row(data: list) -> tuple:
+    """Format phone entries row (users who entered phone number)."""
+    counts = ["# Phone"] + [pad(colorize(str(d[2]), pick_color(d[2], 100, 200))) for d in data]
+    while len(counts) < 8:
+        counts.append(pad("-"))
+    return tuple(counts)
+
+
 def format_wallet_creation_row(data: list) -> tuple:
-    """Format wallet creation row (like daily recharge)."""
-    counts = ["# Wallets"] + [pad(colorize(str(d[2]), pick_color(d[2], 50, 100))) for d in data]
+    """Format wallet creation row."""
+    counts = ["# Wallets"] + [pad(colorize(str(d[3]), pick_color(d[3], 50, 100))) for d in data]
     while len(counts) < 8:
         counts.append(pad("-"))
     return tuple(counts)
@@ -128,10 +141,60 @@ def format_wallet_creation_row(data: list) -> tuple:
 def format_wallet_deleted_row(data: list) -> tuple:
     """Format wallet deleted row."""
     from fmt import RED
-    counts = ["# Deleted"] + [pad(colorize(str(d[3]), RED) if d[3] > 0 else "-") for d in data]
+    counts = ["# Deleted"] + [pad(colorize(str(d[4]), RED) if d[4] > 0 else "-") for d in data]
     while len(counts) < 8:
         counts.append(pad("-"))
     return tuple(counts)
+
+
+def format_repeat_recharge_row(data: list) -> tuple:
+    """Format repeat recharge row (users recharging again after first payment)."""
+    counts = ["# Repeat ADD"] + [pad(colorize(str(d[5]), "yellow") if d[5] > 0 else "-") for d in data]
+    while len(counts) < 8:
+        counts.append(pad("-"))
+    return tuple(counts)
+
+
+def format_add_comparison(data: list) -> list:
+    """Format ADD comparison rows (7 days with by-now counts)."""
+    if not data:
+        return []
+
+    # First row is today (most recent)
+    today_by_now = int(data[0][3]) if data else 0
+    rows = []
+
+    for i, row in enumerate(data):
+        date, day_label, total_count, by_now_count = row
+        total_count = int(total_count)
+        by_now_count = int(by_now_count)
+
+        # Calculate difference vs today
+        if i == 0:
+            diff_str = "-"
+            diff_color = "white"
+        else:
+            diff = today_by_now - by_now_count
+            diff_color = "green" if diff > 0 else ("red" if diff < 0 else "white")
+            diff_str = f"{diff:+d}" if diff != 0 else "0"
+
+        # Highlight today's row
+        if i == 0:
+            rows.append((
+                pad(colorize(day_label, "cyan")),
+                pad(colorize(str(by_now_count), "green")),
+                pad(f"/ {total_count}"),
+                pad(diff_str)
+            ))
+        else:
+            rows.append((
+                pad(day_label),
+                pad(str(by_now_count)),
+                pad(f"/ {total_count}"),
+                pad(colorize(diff_str, diff_color))
+            ))
+
+    return rows
 
 
 def format_daily_count(day_data: tuple) -> str:
@@ -237,6 +300,9 @@ class WalletView(BaseView):
             ContainerConfig("kpi-container", "METRICS (Since Dec 5)", [
                 TableConfig("kpi-table", ["Users", "Total", "New", "Old", "Amount", "Repeat", "Repeat %"])
             ]),
+            ContainerConfig("add-compare-container", "ADD TRANSACTIONS (By This Time)", [
+                TableConfig("add-compare-table", ["Day", "By Now", "Total", "vs Today"])
+            ]),
             ContainerConfig("daily-container", "DAILY STATS (Last 7 Days)", [
                 TableConfig("daily-table", ["Metric", "Today", "Yesterday", "2d", "3d", "4d", "5d", "6d"])
             ]),
@@ -250,6 +316,7 @@ class WalletView(BaseView):
         return {
             'db_stats': fetch_db_stats(),
             'kpis': fetch_kpis(),
+            'add_comparison': fetch_add_comparison(),
             'wallet_creation': fetch_wallet_creation(),
             'daily': fetch_daily_recharges(),
             'replication': fetch_replication(),
@@ -259,8 +326,10 @@ class WalletView(BaseView):
 
     def format_rows(self, data: dict) -> dict:
         counts, amounts = format_daily_rows(data['daily'])
+        phones = format_phone_entries_row(data['wallet_creation'])
         wallets = format_wallet_creation_row(data['wallet_creation'])
         deleted = format_wallet_deleted_row(data['wallet_creation'])
+        repeat_add = format_repeat_recharge_row(data['wallet_creation'])
         kpis = data['kpis']
         return {
             'db-stats-table': [format_db_stats(data['db_stats'])],
@@ -269,7 +338,8 @@ class WalletView(BaseView):
                 ("Consults #",) + format_kpi_row2(kpis)[1:],
                 ("Consults ₹",) + format_kpi_row3(kpis)[1:]
             ],
-            'daily-table': [wallets, deleted, counts, amounts],
+            'add-compare-table': format_add_comparison(data['add_comparison']),
+            'daily-table': [phones, wallets, deleted, counts, amounts, repeat_add],
             'txn-table': [format_transaction(t) for t in data['transactions']]
         }
 

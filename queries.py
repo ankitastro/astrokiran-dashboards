@@ -102,7 +102,7 @@ FROM txn_stats ts;
 """
 
 # Wallet Creation Stats - Daily breakdown (last 7 days)
-# Note: wallet.user_wallets uses timestamp WITHOUT time zone (stored in UTC)
+# Includes: phone entries (auth_users), wallet created, wallet deleted, repeat recharges
 WALLET_CREATION_QUERY = """
 WITH date_series AS (
     SELECT generate_series(
@@ -110,6 +110,14 @@ WITH date_series AS (
         CURRENT_DATE::date,
         '1 day'::interval
     )::date as day
+),
+phone_entries AS (
+    SELECT
+        (created_at + INTERVAL '5 hours 30 minutes')::date as dt,
+        COUNT(*) as cnt
+    FROM auth.auth_users
+    WHERE (created_at + INTERVAL '5 hours 30 minutes') >= CURRENT_DATE - interval '6 days'
+    GROUP BY (created_at + INTERVAL '5 hours 30 minutes')::date
 ),
 wallet_created AS (
     SELECT
@@ -127,15 +135,68 @@ wallet_deleted AS (
     WHERE deleted_at IS NOT NULL
       AND (deleted_at + INTERVAL '5 hours 30 minutes') >= CURRENT_DATE - interval '6 days'
     GROUP BY (deleted_at + INTERVAL '5 hours 30 minutes')::date
+),
+user_first_payment AS (
+    SELECT user_id, MIN((created_at + INTERVAL '5 hours 30 minutes')::date) as first_pay_date
+    FROM wallet.payment_orders
+    WHERE status = 'SUCCESSFUL'
+    GROUP BY user_id
+),
+repeat_recharges AS (
+    SELECT
+        (po.created_at + INTERVAL '5 hours 30 minutes')::date as dt,
+        COUNT(*) as cnt
+    FROM wallet.payment_orders po
+    JOIN user_first_payment ufp ON po.user_id = ufp.user_id
+    WHERE po.status = 'SUCCESSFUL'
+      AND (po.created_at + INTERVAL '5 hours 30 minutes') >= CURRENT_DATE - interval '6 days'
+      AND (po.created_at + INTERVAL '5 hours 30 minutes')::date > ufp.first_pay_date
+    GROUP BY (po.created_at + INTERVAL '5 hours 30 minutes')::date
 )
 SELECT
     ds.day,
     TO_CHAR(ds.day, 'Mon DD') as day_label,
+    COALESCE(pe.cnt, 0) as phone_count,
     COALESCE(wc.cnt, 0) as wallet_count,
-    COALESCE(wd.cnt, 0) as deleted_count
+    COALESCE(wd.cnt, 0) as deleted_count,
+    COALESCE(rr.cnt, 0) as repeat_recharge_count
 FROM date_series ds
+LEFT JOIN phone_entries pe ON ds.day = pe.dt
 LEFT JOIN wallet_created wc ON ds.day = wc.dt
 LEFT JOIN wallet_deleted wd ON ds.day = wd.dt
+LEFT JOIN repeat_recharges rr ON ds.day = rr.dt
+ORDER BY ds.day DESC;
+"""
+
+# ADD Transactions Comparison (7 days with by-this-time comparison)
+ADD_COMPARISON_QUERY = """
+WITH current_time_ist AS (
+    SELECT (NOW() + INTERVAL '5 hours 30 minutes')::time as t
+),
+date_series AS (
+    SELECT generate_series(
+        (CURRENT_DATE - interval '6 days')::date,
+        CURRENT_DATE::date,
+        '1 day'::interval
+    )::date as day
+),
+daily_counts AS (
+    SELECT
+        (created_at + INTERVAL '5 hours 30 minutes')::date as add_date,
+        (created_at + INTERVAL '5 hours 30 minutes')::time as add_time,
+        COUNT(*) as cnt
+    FROM wallet.wallet_transactions
+    WHERE type = 'ADD'
+      AND (created_at + INTERVAL '5 hours 30 minutes')::date >= CURRENT_DATE - interval '6 days'
+    GROUP BY (created_at + INTERVAL '5 hours 30 minutes')::date,
+             (created_at + INTERVAL '5 hours 30 minutes')::time
+)
+SELECT
+    ds.day as date,
+    TO_CHAR(ds.day, 'Dy Mon DD') as day_label,
+    COALESCE((SELECT SUM(cnt) FROM daily_counts WHERE add_date = ds.day), 0) as total_count,
+    COALESCE((SELECT SUM(cnt) FROM daily_counts, current_time_ist WHERE add_date = ds.day AND add_time <= current_time_ist.t), 0) as by_now_count
+FROM date_series ds
 ORDER BY ds.day DESC;
 """
 
