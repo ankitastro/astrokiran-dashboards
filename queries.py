@@ -1131,22 +1131,18 @@ WHERE gp.deleted_at IS NULL
 ORDER BY COALESCE(got.today_earnings, 0) DESC;
 """
 
-# Promo grant spending by guide
+# Promo grant spending by guide (simplified - counts promotional spent transactions per guide)
 PROMO_GRANT_SPENDING_QUERY = """
 SELECT
     wo.consultant_id,
     gp.full_name as guide_name,
     COUNT(*) as grants_spent_on_this_guide
-FROM wallet.wallet_transactions wt_grant
-JOIN wallet.wallet_transactions wt_spent
-    ON wt_grant.transaction_id = wt_spent.source_grant_txn_id
-JOIN wallet.wallet_orders wo
-    ON wt_spent.order_id = wo.order_id
-LEFT JOIN guide.guide_profile gp
-    ON wo.consultant_id = gp.id
-WHERE wt_grant.type = 'PROMOTION_GRANT'
-  AND wt_grant.created_at >= '2025-11-13 00:00:00'
-  AND wt_spent.type = 'SPENT'
+FROM wallet.wallet_transactions wt
+JOIN wallet.wallet_orders wo ON wt.order_id = wo.order_id
+LEFT JOIN guide.guide_profile gp ON wo.consultant_id = gp.id
+WHERE wt.type = 'SPENT'
+  AND wt.is_promotional = true
+  AND wt.created_at >= '2025-11-13 00:00:00'
 GROUP BY wo.consultant_id, gp.full_name
 ORDER BY grants_spent_on_this_guide DESC;
 """
