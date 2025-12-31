@@ -845,11 +845,10 @@ guide_earnings AS (
 guide_pricing AS (
     SELECT
         gp.id as guide_id,
-        cw.price_per_minute
+        c.price_per_minute
     FROM guide.guide_profile gp
-    LEFT JOIN wallet.consultant_wallets cw
-        ON REPLACE(REPLACE(gp.phone_number, '+91', ''), '+', '') = cw.phone_number
-        AND cw.deleted_at IS NULL
+    LEFT JOIN wallet.consultants c
+        ON REPLACE(REPLACE(gp.phone_number, '+91', ''), '+', '') = c.phone_number
     WHERE gp.deleted_at IS NULL
 ),
 guide_orders_today AS (
@@ -951,11 +950,10 @@ guide_earnings AS (
 guide_pricing AS (
     SELECT
         gp.id as guide_id,
-        cw.price_per_minute
+        c.price_per_minute
     FROM guide.guide_profile gp
-    LEFT JOIN wallet.consultant_wallets cw
-        ON REPLACE(REPLACE(gp.phone_number, '+91', ''), '+', '') = cw.phone_number
-        AND cw.deleted_at IS NULL
+    LEFT JOIN wallet.consultants c
+        ON REPLACE(REPLACE(gp.phone_number, '+91', ''), '+', '') = c.phone_number
     WHERE gp.deleted_at IS NULL
 ),
 guide_orders_today AS (
@@ -1057,11 +1055,10 @@ guide_earnings AS (
 guide_pricing AS (
     SELECT
         gp.id as guide_id,
-        cw.price_per_minute
+        c.price_per_minute
     FROM guide.guide_profile gp
-    LEFT JOIN wallet.consultant_wallets cw
-        ON REPLACE(REPLACE(gp.phone_number, '+91', ''), '+', '') = cw.phone_number
-        AND cw.deleted_at IS NULL
+    LEFT JOIN wallet.consultants c
+        ON REPLACE(REPLACE(gp.phone_number, '+91', ''), '+', '') = c.phone_number
     WHERE gp.deleted_at IS NULL
 ),
 guide_orders_today AS (
