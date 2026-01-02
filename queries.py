@@ -303,6 +303,7 @@ LIMIT %s OFFSET %s;
 """
 
 # Wallet Transactions (recent, paginated)
+# For SPENT transactions, shows guide name instead of comment
 WALLET_TRANSACTIONS_QUERY = """
 SELECT
     wt.transaction_id,
@@ -312,10 +313,15 @@ SELECT
     wt.amount,
     wt.real_cash_delta,
     wt.virtual_cash_delta,
-    wt.comment,
+    CASE
+        WHEN wt.type = 'SPENT' THEN COALESCE(gp.full_name, wt.comment)
+        ELSE wt.comment
+    END as comment_or_guide,
     wt.created_at + INTERVAL '5 hours 30 minutes' as created_at_ist
 FROM wallet.wallet_transactions wt
 LEFT JOIN customers.customer c ON wt.user_id = c.customer_id
+LEFT JOIN wallet.wallet_orders wo ON wt.order_id = wo.order_id AND wt.type = 'SPENT'
+LEFT JOIN guide.guide_profile gp ON wo.consultant_id = gp.id
 ORDER BY wt.created_at DESC
 LIMIT %s OFFSET %s;
 """

@@ -307,7 +307,7 @@ class WalletView(BaseView):
                 TableConfig("daily-table", ["Metric", "Today", "Yesterday", "2d", "3d", "4d", "5d", "6d"])
             ]),
             ContainerConfig("txn-container", "WALLET TRANSACTIONS", [
-                TableConfig("txn-table", ["User ID", "Phone", "Type", "Amount", "Real", "Virtual", "Comment", "Time"], cursor=True)
+                TableConfig("txn-table", ["User ID", "Phone", "Type", "Amount", "Real", "Virtual", "Guide/Comment", "Time"], cursor=True)
             ])
         ]
 
