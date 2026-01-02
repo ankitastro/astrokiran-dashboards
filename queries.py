@@ -3,7 +3,7 @@ SQL Queries for AstroKiran Dashboard
 """
 
 # Daily Recharge Counts (last 7 days) - shows count and amount per day
-# Note: wallet.payment_orders uses timestamp WITHOUT time zone (stored in UTC)
+# Uses wallet_transactions (ADD) as source of truth
 DAILY_RECHARGE_QUERY = """
 WITH date_series AS (
     SELECT generate_series(
@@ -14,13 +14,13 @@ WITH date_series AS (
 ),
 daily_stats AS (
     SELECT
-        (po.created_at + INTERVAL '5 hours 30 minutes')::date as recharge_date,
+        (wt.created_at + INTERVAL '5 hours 30 minutes')::date as recharge_date,
         COUNT(*) as recharge_count,
-        COALESCE(SUM(amount), 0) as total_amount
-    FROM wallet.payment_orders po
-    WHERE po.status = 'SUCCESSFUL'
-      AND (po.created_at + INTERVAL '5 hours 30 minutes') >= CURRENT_DATE - interval '6 days'
-    GROUP BY (po.created_at + INTERVAL '5 hours 30 minutes')::date
+        COALESCE(SUM(wt.real_cash_delta), 0) as total_amount
+    FROM wallet.wallet_transactions wt
+    WHERE wt.type = 'ADD'
+      AND (wt.created_at + INTERVAL '5 hours 30 minutes') >= CURRENT_DATE - interval '6 days'
+    GROUP BY (wt.created_at + INTERVAL '5 hours 30 minutes')::date
 )
 SELECT
     ds.day,
