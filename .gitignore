@@ -39,3 +39,4 @@ ENV/
 .DS_Store
 Thumbs.db
 data_dump/
+.neo4j_sync_state.json
