@@ -33,13 +33,20 @@ dashboards/
 ├── app.py              # Main app using view framework
 ├── db.py               # Stateless DB functions
 ├── fmt.py              # Stateless formatting functions
-├── queries.py          # SQL queries
+├── queries.py          # SQL queries (IST timezone adjusted)
 ├── styles.py           # CSS styles
+├── SUPERSET_API.md     # Superset REST API documentation
 └── views/
-    ├── __init__.py
     ├── base.py         # BaseView protocol
     ├── registry.py     # ViewRegistry
-    ├── wallet.py       # Wallet view
+    ├── wallet.py       # Wallet dashboard view
+    ├── payments.py     # Payments view
+    ├── revenue.py      # Revenue view
+    ├── users.py        # Users view
+    ├── consultations.py # Consultations view
+    ├── guides.py       # Guides view
+    ├── astrologer_availability.py
+    ├── astrologer_performance.py
     └── meta.py         # Meta Ads view
 ```
 
@@ -165,3 +172,25 @@ Colors (Dolphie-inspired dark blue):
 ## Legacy Dashboards
 
 `guides_dashboard.py` and `wallet_dashboard.py` still work but don't use the view framework. They import queries from `guide_queries.py` and `queries.py`.
+
+## Timezone Handling
+
+**Critical:** All timestamps in the database are UTC. Convert to IST (+5:30) for display:
+
+```sql
+-- Use this pattern in all date queries
+(created_at + INTERVAL '5 hours 30 minutes')::date as date_ist
+
+-- For "today" comparisons
+WHERE (created_at + INTERVAL '5 hours 30 minutes')::date = (NOW() + INTERVAL '5 hours 30 minutes')::date
+```
+
+## Superset Integration
+
+See `SUPERSET_API.md` for REST API documentation. Key endpoints:
+- Login: `POST /api/v1/security/login`
+- CSRF: `GET /api/v1/security/csrf_token/`
+- Datasets: `POST /api/v1/dataset/`
+- Charts: `POST /api/v1/chart/`
+
+Superset credentials are in `.env` (SUPERSET_URL, SUPERSET_USERNAME, SUPERSET_PASSWORD).

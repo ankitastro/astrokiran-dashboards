@@ -4,11 +4,15 @@ SQL Queries for AstroKiran Dashboard
 
 # Daily Recharge Counts (last 7 days) - shows count and amount per day
 # Uses wallet_transactions (ADD) as source of truth
+# Note: Uses IST date (NOW() + 5:30) instead of CURRENT_DATE (UTC)
 DAILY_RECHARGE_QUERY = """
-WITH date_series AS (
+WITH today_ist AS (
+    SELECT (NOW() + INTERVAL '5 hours 30 minutes')::date as dt
+),
+date_series AS (
     SELECT generate_series(
-        (CURRENT_DATE - interval '6 days')::date,
-        CURRENT_DATE::date,
+        ((SELECT dt FROM today_ist) - interval '6 days')::date,
+        (SELECT dt FROM today_ist)::date,
         '1 day'::interval
     )::date as day
 ),
@@ -19,7 +23,7 @@ daily_stats AS (
         COALESCE(SUM(wt.real_cash_delta), 0) as total_amount
     FROM wallet.wallet_transactions wt
     WHERE wt.type = 'ADD'
-      AND (wt.created_at + INTERVAL '5 hours 30 minutes') >= CURRENT_DATE - interval '6 days'
+      AND (wt.created_at + INTERVAL '5 hours 30 minutes') >= (SELECT dt FROM today_ist) - interval '6 days'
     GROUP BY (wt.created_at + INTERVAL '5 hours 30 minutes')::date
 )
 SELECT
@@ -103,11 +107,15 @@ FROM txn_stats ts;
 
 # Wallet Creation Stats - Daily breakdown (last 7 days)
 # Includes: phone entries (auth_users), wallet created, wallet deleted, repeat recharges
+# Note: Uses IST date (NOW() + 5:30) instead of CURRENT_DATE (UTC)
 WALLET_CREATION_QUERY = """
-WITH date_series AS (
+WITH today_ist AS (
+    SELECT (NOW() + INTERVAL '5 hours 30 minutes')::date as dt
+),
+date_series AS (
     SELECT generate_series(
-        (CURRENT_DATE - interval '6 days')::date,
-        CURRENT_DATE::date,
+        ((SELECT dt FROM today_ist) - interval '6 days')::date,
+        (SELECT dt FROM today_ist)::date,
         '1 day'::interval
     )::date as day
 ),
@@ -116,7 +124,7 @@ phone_entries AS (
         (created_at + INTERVAL '5 hours 30 minutes')::date as dt,
         COUNT(*) as cnt
     FROM auth.auth_users
-    WHERE (created_at + INTERVAL '5 hours 30 minutes') >= CURRENT_DATE - interval '6 days'
+    WHERE (created_at + INTERVAL '5 hours 30 minutes') >= (SELECT dt FROM today_ist) - interval '6 days'
     GROUP BY (created_at + INTERVAL '5 hours 30 minutes')::date
 ),
 wallet_created AS (
@@ -124,7 +132,7 @@ wallet_created AS (
         (created_at + INTERVAL '5 hours 30 minutes')::date as dt,
         COUNT(*) as cnt
     FROM wallet.user_wallets
-    WHERE (created_at + INTERVAL '5 hours 30 minutes') >= CURRENT_DATE - interval '6 days'
+    WHERE (created_at + INTERVAL '5 hours 30 minutes') >= (SELECT dt FROM today_ist) - interval '6 days'
     GROUP BY (created_at + INTERVAL '5 hours 30 minutes')::date
 ),
 wallet_deleted AS (
@@ -133,7 +141,7 @@ wallet_deleted AS (
         COUNT(*) as cnt
     FROM wallet.user_wallets
     WHERE deleted_at IS NOT NULL
-      AND (deleted_at + INTERVAL '5 hours 30 minutes') >= CURRENT_DATE - interval '6 days'
+      AND (deleted_at + INTERVAL '5 hours 30 minutes') >= (SELECT dt FROM today_ist) - interval '6 days'
     GROUP BY (deleted_at + INTERVAL '5 hours 30 minutes')::date
 ),
 user_first_payment AS (
@@ -149,7 +157,7 @@ repeat_recharges AS (
     FROM wallet.payment_orders po
     JOIN user_first_payment ufp ON po.user_id = ufp.user_id
     WHERE po.status = 'SUCCESSFUL'
-      AND (po.created_at + INTERVAL '5 hours 30 minutes') >= CURRENT_DATE - interval '6 days'
+      AND (po.created_at + INTERVAL '5 hours 30 minutes') >= (SELECT dt FROM today_ist) - interval '6 days'
       AND (po.created_at + INTERVAL '5 hours 30 minutes')::date > ufp.first_pay_date
     GROUP BY (po.created_at + INTERVAL '5 hours 30 minutes')::date
 )
@@ -169,14 +177,16 @@ ORDER BY ds.day DESC;
 """
 
 # ADD Transactions Comparison (7 days with by-this-time comparison)
+# Note: Uses IST date (NOW() + 5:30) instead of CURRENT_DATE (UTC)
 ADD_COMPARISON_QUERY = """
-WITH current_time_ist AS (
-    SELECT (NOW() + INTERVAL '5 hours 30 minutes')::time as t
+WITH today_ist AS (
+    SELECT (NOW() + INTERVAL '5 hours 30 minutes')::date as dt,
+           (NOW() + INTERVAL '5 hours 30 minutes')::time as t
 ),
 date_series AS (
     SELECT generate_series(
-        (CURRENT_DATE - interval '6 days')::date,
-        CURRENT_DATE::date,
+        ((SELECT dt FROM today_ist) - interval '6 days')::date,
+        (SELECT dt FROM today_ist)::date,
         '1 day'::interval
     )::date as day
 ),
@@ -187,7 +197,7 @@ daily_counts AS (
         COUNT(*) as cnt
     FROM wallet.wallet_transactions
     WHERE type = 'ADD'
-      AND (created_at + INTERVAL '5 hours 30 minutes')::date >= CURRENT_DATE - interval '6 days'
+      AND (created_at + INTERVAL '5 hours 30 minutes')::date >= (SELECT dt FROM today_ist) - interval '6 days'
     GROUP BY (created_at + INTERVAL '5 hours 30 minutes')::date,
              (created_at + INTERVAL '5 hours 30 minutes')::time
 )
@@ -195,7 +205,7 @@ SELECT
     ds.day as date,
     TO_CHAR(ds.day, 'Dy Mon DD') as day_label,
     COALESCE((SELECT SUM(cnt) FROM daily_counts WHERE add_date = ds.day), 0) as total_count,
-    COALESCE((SELECT SUM(cnt) FROM daily_counts, current_time_ist WHERE add_date = ds.day AND add_time <= current_time_ist.t), 0) as by_now_count
+    COALESCE((SELECT SUM(cnt) FROM daily_counts, today_ist WHERE add_date = ds.day AND add_time <= today_ist.t), 0) as by_now_count
 FROM date_series ds
 ORDER BY ds.day DESC;
 """
