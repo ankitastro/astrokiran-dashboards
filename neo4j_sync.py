@@ -120,11 +120,11 @@ def q_auth_users(since: datetime) -> str:
 
 
 def q_customers(since: datetime) -> str:
-    """Query for new/updated customers."""
+    """Query for new/updated customers (including deleted)."""
     return f"""
-    SELECT customer_id, phone_number, country_code, x_auth_id, created_at, updated_at
+    SELECT customer_id, phone_number, country_code, x_auth_id, created_at, updated_at, deleted_at
     FROM customers.customer
-    WHERE deleted_at IS NULL AND (created_at >= %s OR updated_at >= %s)
+    WHERE created_at >= %s OR updated_at >= %s OR deleted_at >= %s
     """
 
 
@@ -233,15 +233,17 @@ def sync_auth_users(cursor, driver, since: datetime) -> int:
 
 
 def sync_customers(cursor, driver, since: datetime) -> int:
-    """Sync customers."""
-    data = serialize_data(pg_fetch(cursor, q_customers(since), (since, since)))
+    """Sync customers (including deleted)."""
+    data = serialize_data(pg_fetch(cursor, q_customers(since), (since, since, since)))
     if not data:
         return 0
     query = """
     UNWIND $batch AS row
     MERGE (n:Customer {customer_id: row.customer_id})
     SET n.phone_number = row.phone_number, n.country_code = row.country_code,
-        n.x_auth_id = row.x_auth_id, n.created_at = row.created_at
+        n.x_auth_id = row.x_auth_id, n.created_at = row.created_at,
+        n.deleted_at = row.deleted_at,
+        n.is_deleted = CASE WHEN row.deleted_at IS NOT NULL THEN true ELSE false END
     """
     neo4j_batch(driver, query, data)
     return len(data)

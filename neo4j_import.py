@@ -101,15 +101,15 @@ def create_constraints(driver):
 
 Q_AUTH_USERS = "SELECT id, phone_number, is_active, is_test_user, created_at FROM auth.auth_users WHERE deleted_at IS NULL"
 
-Q_CUSTOMERS = "SELECT customer_id, phone_number, country_code, x_auth_id, wallet_user_id, created_at FROM customers.customer WHERE deleted_at IS NULL"
+Q_CUSTOMERS = "SELECT customer_id, phone_number, country_code, x_auth_id, wallet_user_id, created_at, deleted_at FROM customers.customer"
 
 Q_CUSTOMER_PROFILES = "SELECT profile_id, customer_id, name, dob, birth_city, zodiac_sign, gender, created_at FROM customers.customer_profile WHERE deleted_at IS NULL"
 
 Q_GUIDES = """
 SELECT id, full_name, phone_number, email, x_auth_id, availability_state,
        chat_enabled, voice_enabled, video_enabled, ranking_score, tier,
-       referral_code, referrer_code, years_of_experience, created_at
-FROM guide.guide_profile WHERE deleted_at IS NULL
+       referral_code, referrer_code, years_of_experience, created_at, deleted_at
+FROM guide.guide_profile
 """
 
 Q_SKILLS = "SELECT id, name, description FROM guide.skills WHERE deleted_at IS NULL"
@@ -123,7 +123,7 @@ Q_GUIDE_LANGUAGES = "SELECT guide_id, language_id FROM guide.guide_languages WHE
 Q_CONSULTATIONS = """
 SELECT id, customer_id, guide_id, mode, state, order_id,
        base_rate_per_minute, call_duration_seconds, is_quick_connect_request,
-       promotional, free, created_at, completed_at
+       promotional, free, created_at, completed_at, requested_at, accepted_at
 FROM consultation.consultation WHERE deleted_at IS NULL
 """
 
@@ -176,6 +176,19 @@ SELECT id, phone, name, source, utm_source, utm_medium, utm_campaign, status, cr
 FROM marketing.leads
 """
 
+Q_GUIDE_ACTIVITY = """
+SELECT
+    (original_data->>'id')::int as guide_id,
+    COUNT(DISTINCT DATE(action_tstamp)) as days_active,
+    COUNT(*) as state_changes_30d,
+    MAX(action_tstamp) as last_activity
+FROM audit.logged_actions
+WHERE table_name = 'guide_profile'
+  AND original_data->>'availability_state' IS DISTINCT FROM new_data->>'availability_state'
+  AND action_tstamp >= NOW() - INTERVAL '30 days'
+GROUP BY original_data->>'id'
+"""
+
 
 # === NODE IMPORT FUNCTIONS ===
 
@@ -193,14 +206,16 @@ def import_auth_users(driver, data: list):
 
 
 def import_customers(driver, data: list):
-    """Import Customer nodes."""
+    """Import Customer nodes (including deleted)."""
     query = """
     UNWIND $batch AS row
     MERGE (n:Customer {customer_id: row.customer_id})
     SET n.phone_number = row.phone_number,
         n.country_code = row.country_code,
         n.x_auth_id = row.x_auth_id,
-        n.created_at = row.created_at
+        n.created_at = row.created_at,
+        n.deleted_at = row.deleted_at,
+        n.is_deleted = CASE WHEN row.deleted_at IS NOT NULL THEN true ELSE false END
     """
     neo4j_batch(driver, query, data)
 
@@ -218,7 +233,7 @@ def import_customer_profiles(driver, data: list):
 
 
 def import_guides(driver, data: list):
-    """Import Guide nodes."""
+    """Import Guide nodes (including deleted)."""
     query = """
     UNWIND $batch AS row
     MERGE (n:Guide {id: row.id})
@@ -227,7 +242,9 @@ def import_guides(driver, data: list):
         n.chat_enabled = row.chat_enabled, n.voice_enabled = row.voice_enabled,
         n.video_enabled = row.video_enabled, n.ranking_score = row.ranking_score,
         n.tier = row.tier, n.referral_code = row.referral_code,
-        n.referrer_code = row.referrer_code
+        n.referrer_code = row.referrer_code, n.created_at = row.created_at,
+        n.deleted_at = row.deleted_at,
+        n.is_deleted = CASE WHEN row.deleted_at IS NOT NULL THEN true ELSE false END
     """
     neo4j_batch(driver, query, data)
 
@@ -261,7 +278,8 @@ def import_consultations(driver, data: list):
         n.mode = row.mode, n.state = row.state, n.order_id = row.order_id,
         n.duration_seconds = row.call_duration_seconds,
         n.is_quick_connect = row.is_quick_connect_request,
-        n.promotional = row.promotional, n.created_at = row.created_at
+        n.promotional = row.promotional, n.created_at = row.created_at,
+        n.requested_at = row.requested_at, n.accepted_at = row.accepted_at
     """
     neo4j_batch(driver, query, data)
 
@@ -370,6 +388,18 @@ def import_leads(driver, data: list):
     SET n.phone = row.phone, n.name = row.name, n.source = row.source,
         n.utm_source = row.utm_source, n.utm_medium = row.utm_medium,
         n.utm_campaign = row.utm_campaign, n.status = row.status
+    """
+    neo4j_batch(driver, query, data)
+
+
+def update_guide_activity(driver, data: list):
+    """Update Guide nodes with activity metrics from audit log."""
+    query = """
+    UNWIND $batch AS row
+    MATCH (g:Guide {id: row.guide_id})
+    SET g.days_active_30d = row.days_active,
+        g.state_changes_30d = row.state_changes_30d,
+        g.last_activity = row.last_activity
     """
     neo4j_batch(driver, query, data)
 
@@ -715,6 +745,12 @@ def import_relationships(cursor, driver):
     log("  -> Offer reservation links")
     link_offer_reservation(driver)
     link_reservation_customer(driver)
+
+    # Guide activity metrics (from audit log - availability state changes)
+    log("  -> Guide activity (from audit log)")
+    activity_data = serialize_data(pg_fetch(cursor, Q_GUIDE_ACTIVITY))
+    update_guide_activity(driver, activity_data)
+    log(f"     Updated {len(activity_data)} guides with activity data")
 
 
 if __name__ == '__main__':
