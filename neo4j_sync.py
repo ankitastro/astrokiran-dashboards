@@ -142,8 +142,24 @@ def q_guides() -> str:
     return """
     SELECT id, full_name, phone_number, email, x_auth_id, availability_state,
            chat_enabled, voice_enabled, video_enabled, ranking_score, tier,
-           referral_code, referrer_code, years_of_experience, created_at
-    FROM guide.guide_profile WHERE deleted_at IS NULL
+           referral_code, referrer_code, years_of_experience, created_at, deleted_at
+    FROM guide.guide_profile
+    """
+
+
+def q_guide_activity() -> str:
+    """Query guide activity from audit log (last 30 days)."""
+    return """
+    SELECT
+        (original_data->>'id')::int as guide_id,
+        COUNT(DISTINCT DATE(action_tstamp)) as days_active,
+        COUNT(*) as state_changes_30d,
+        MAX(action_tstamp) as last_activity
+    FROM audit.logged_actions
+    WHERE table_name = 'guide_profile'
+      AND original_data->>'availability_state' IS DISTINCT FROM new_data->>'availability_state'
+      AND action_tstamp >= NOW() - INTERVAL '30 days'
+    GROUP BY original_data->>'id'
     """
 
 
@@ -152,7 +168,7 @@ def q_consultations(since: datetime) -> str:
     return f"""
     SELECT id, customer_id, guide_id, mode, state, order_id,
            base_rate_per_minute, call_duration_seconds, is_quick_connect_request,
-           promotional, free, created_at, completed_at, updated_at
+           promotional, free, created_at, completed_at, requested_at, accepted_at, updated_at
     FROM consultation.consultation
     WHERE deleted_at IS NULL AND (created_at >= %s OR updated_at >= %s)
     """
@@ -274,7 +290,25 @@ def sync_guides(cursor, driver) -> int:
         n.x_auth_id = row.x_auth_id, n.availability_state = row.availability_state,
         n.chat_enabled = row.chat_enabled, n.voice_enabled = row.voice_enabled,
         n.video_enabled = row.video_enabled, n.ranking_score = row.ranking_score,
-        n.tier = row.tier, n.referral_code = row.referral_code
+        n.tier = row.tier, n.referral_code = row.referral_code,
+        n.created_at = row.created_at, n.deleted_at = row.deleted_at,
+        n.is_deleted = CASE WHEN row.deleted_at IS NOT NULL THEN true ELSE false END
+    """
+    neo4j_batch(driver, query, data)
+    return len(data)
+
+
+def sync_guide_activity(cursor, driver) -> int:
+    """Sync guide activity from audit log."""
+    data = serialize_data(pg_fetch(cursor, q_guide_activity()))
+    if not data:
+        return 0
+    query = """
+    UNWIND $batch AS row
+    MATCH (g:Guide {id: row.guide_id})
+    SET g.days_active_30d = row.days_active,
+        g.state_changes_30d = row.state_changes_30d,
+        g.last_activity = row.last_activity
     """
     neo4j_batch(driver, query, data)
     return len(data)
@@ -292,7 +326,8 @@ def sync_consultations(cursor, driver, since: datetime) -> int:
         n.mode = row.mode, n.state = row.state, n.order_id = row.order_id,
         n.duration_seconds = row.call_duration_seconds,
         n.is_quick_connect = row.is_quick_connect_request,
-        n.promotional = row.promotional, n.created_at = row.created_at
+        n.promotional = row.promotional, n.created_at = row.created_at,
+        n.requested_at = row.requested_at, n.accepted_at = row.accepted_at
     """
     neo4j_batch(driver, query, data)
     return len(data)
@@ -587,6 +622,9 @@ def sync_all_nodes(cursor, driver, since: datetime) -> dict:
 
     log("Syncing Guides...")
     stats['Guides'] = sync_guides(cursor, driver)
+
+    log("Syncing Guide Activity...")
+    stats['GuideActivity'] = sync_guide_activity(cursor, driver)
 
     log("Syncing Consultations...")
     stats['Consultations'] = sync_consultations(cursor, driver, since)
