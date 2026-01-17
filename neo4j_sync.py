@@ -27,7 +27,7 @@ NEO4J_URI = os.getenv('NEO4J_URI', 'bolt://localhost:7687')
 NEO4J_USER = os.getenv('NEO4J_USER', 'neo4j')
 NEO4J_PASSWORD = os.getenv('NEO4J_PASSWORD', 'password')
 
-SYNC_STATE_FILE = '/Users/ankitgupta/astrokiran-analytics/dashboards/.neo4j_sync_state.json'
+SYNC_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.neo4j_sync_state.json')
 
 
 # === STATE MANAGEMENT ===
