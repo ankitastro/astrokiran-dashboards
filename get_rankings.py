@@ -6,10 +6,20 @@ Activity multiplier penalty: <5d=0.5x, 5-10d=0.75x, 10-15d=0.9x, 15+d=1.0x
 """
 
 import os
+import psycopg2
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
 
 load_dotenv()
+
+# PostgreSQL config for updating rankings
+PG_PRIMARY_CONFIG = {
+    'host': os.getenv('DB_PRIMARY_ENDPOINT'),
+    'port': int(os.getenv('DB_PRIMARY_PORT', 5432)),
+    'database': os.getenv('DB_PRIMARY_NAME', 'astrokiran'),
+    'user': os.getenv('DB_PRIMARY_USERNAME'),
+    'password': os.getenv('DB_PRIMARY_PASSWORD')
+}
 
 NEO4J_URI = os.getenv('NEO4J_URI', 'bolt://localhost:7687')
 NEO4J_USER = os.getenv('NEO4J_USER', 'neo4j')
@@ -221,14 +231,51 @@ def print_sql(rankings):
     print(f"WHERE id IN ({', '.join(ids)});")
 
 
+def update_rankings_in_db(rankings):
+    """Update ranking_score in PostgreSQL database."""
+    if not rankings:
+        print("No rankings to update")
+        return
+
+    conn = psycopg2.connect(**PG_PRIMARY_CONFIG)
+    cur = conn.cursor()
+
+    # Build the CASE statement
+    case_parts = [f"WHEN {r['id']} THEN {r['ranking']:.2f}" for r in rankings]
+    ids = [str(r['id']) for r in rankings]
+
+    sql = f"""
+    UPDATE guide.guide_profile
+    SET ranking_score = CASE id {' '.join(case_parts)} END,
+        updated_at = NOW()
+    WHERE id IN ({', '.join(ids)})
+    """
+
+    cur.execute(sql)
+    updated = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    print(f"Updated ranking_score for {updated} guides in PostgreSQL")
+
+
 if __name__ == '__main__':
     import sys
+    from datetime import datetime
 
     rankings = get_rankings()
 
-    if '--sql' in sys.argv:
+    if '--update' in sys.argv:
+        # Update rankings in PostgreSQL
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Updating rankings in PostgreSQL...")
+        update_rankings_in_db(rankings)
+        print_table(rankings)
+        print(f"\nTotal: {len(rankings)} guides")
+    elif '--sql' in sys.argv:
         print_sql(rankings)
     else:
         print_table(rankings)
         print(f"\nTotal: {len(rankings)} guides")
         print("\nRun with --sql flag to generate SQL update statement")
+        print("Run with --update flag to update rankings in PostgreSQL")
