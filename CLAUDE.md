@@ -35,7 +35,10 @@ dashboards/
 ├── fmt.py              # Stateless formatting functions
 ├── queries.py          # SQL queries (IST timezone adjusted)
 ├── styles.py           # CSS styles
-├── SUPERSET_API.md     # Superset REST API documentation
+├── get_rankings.py     # Neo4j guide ranking system
+├── neo4j_sync.py       # PostgreSQL → Neo4j incremental sync
+├── components/
+│   └── date_range.py   # Date range picker component
 └── views/
     ├── base.py         # BaseView protocol
     ├── registry.py     # ViewRegistry
@@ -47,7 +50,9 @@ dashboards/
     ├── guides.py       # Guides view
     ├── astrologer_availability.py
     ├── astrologer_performance.py
-    └── meta.py         # Meta Ads view
+    ├── meta.py         # Meta Ads view
+    ├── meta_campaigns.py
+    └── meta_totals.py
 ```
 
 ## View Framework
@@ -172,6 +177,65 @@ Colors (Dolphie-inspired dark blue):
 ## Legacy Dashboards
 
 `guides_dashboard.py` and `wallet_dashboard.py` still work but don't use the view framework. They import queries from `guide_queries.py` and `queries.py`.
+
+## Neo4j Guide Ranking System
+
+Graph-based ranking algorithm for astrologers. Deployed on AWS server `65.2.176.137` (prod-worker-wapp).
+
+### Running Rankings
+
+```bash
+# View current rankings
+python get_rankings.py
+
+# Generate SQL update statement
+python get_rankings.py --sql
+
+# Update rankings in PostgreSQL (production)
+python get_rankings.py --update
+```
+
+### 9-Factor Algorithm
+
+| Factor | Weight | Description |
+|--------|--------|-------------|
+| Repeat Rate | 35% | (total_bookings - unique_customers) / total_bookings |
+| AOV | 15% | Average order value (capped at ₹50) |
+| Volume | 15% | Log scale of completed consultations (200 = 100%) |
+| Activity | 15% | Days active in last 30 days (20+ = 100%) |
+| Rating | 5% | Bayesian rating (prior: 5 reviews at 4.0) |
+| Response | 5% | Response time score (≤30s = 100%) |
+| Consistency | 5% | Review rate (reviews / completed) |
+| Reliability | 3% | 1 - (cancelled / total) |
+| Experience | 2% | Months since joined (24+ = 100%) |
+
+**Activity Multiplier Penalty:**
+- <5 days active: 0.5x
+- 5-10 days: 0.75x
+- 10-15 days: 0.9x
+- 15+ days: 1.0x
+
+### Neo4j Sync
+
+```bash
+# Run incremental sync (hourly via cron)
+python neo4j_sync.py
+```
+
+Sync state stored in `.neo4j_sync_state.json`. Requires Neo4j environment variables:
+```
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=<password>
+```
+
+For production updates, also requires:
+```
+DB_PRIMARY_ENDPOINT=<primary-rds-endpoint>
+DB_PRIMARY_USERNAME=<username>
+DB_PRIMARY_PASSWORD=<password>
+DB_PRIMARY_NAME=astrokiran
+```
 
 ## Timezone Handling
 

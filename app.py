@@ -30,6 +30,7 @@ from views.meta_totals import MetaTotalsView
 from views.astrologer_performance import AstrologerPerformanceView
 from views.astrologer_availability import AstrologerAvailabilityView
 from views.guides import GuidesView
+from views.guide_performance import GuidePerformanceView
 
 
 # --- Register Views ---
@@ -46,6 +47,7 @@ ViewRegistry.register(MetaTotalsView())        # BD-7.0
 ViewRegistry.register(AstrologerPerformanceView())   # BD-8.0
 ViewRegistry.register(AstrologerAvailabilityView())  # BD-9.0
 ViewRegistry.register(GuidesView())                  # Guides Dashboard
+ViewRegistry.register(GuidePerformanceView())        # Guide Performance (Repeat/Leakage)
 
 
 # --- Modal Screens ---

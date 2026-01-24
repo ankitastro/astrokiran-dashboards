@@ -1180,6 +1180,122 @@ WHERE f.deleted_at IS NULL
 ORDER BY c.guide_id, f.created_at DESC;
 """
 
+# Guide Performance Query - Repeat & Retention Rate per Guide
+# Flow: SPENT (Guide) → ADD → ADD again (since Dec 5, 2025)
+# Repeat% = 1st ADD / Spoke (customers who recharged after speaking)
+# Retain% = 2nd ADD / 1st ADD (customers who recharged again)
+GUIDE_PERFORMANCE_QUERY = """
+WITH first_guide_spent AS (
+    SELECT
+        wo.consultant_id as guide_id,
+        wt.user_id,
+        MIN(wt.created_at) as first_spent_at
+    FROM wallet.wallet_transactions wt
+    JOIN wallet.wallet_orders wo ON wt.order_id = wo.order_id
+    WHERE wt.type = 'SPENT'
+      AND (wt.created_at + INTERVAL '5 hours 30 minutes')::date >= '2025-12-05'
+    GROUP BY wo.consultant_id, wt.user_id
+),
+adds_after AS (
+    SELECT
+        fgs.guide_id,
+        fgs.user_id,
+        wt.created_at as add_at,
+        ROW_NUMBER() OVER (PARTITION BY fgs.guide_id, fgs.user_id ORDER BY wt.created_at) as add_num
+    FROM first_guide_spent fgs
+    JOIN wallet.wallet_transactions wt ON fgs.user_id = wt.user_id
+    WHERE wt.type = 'ADD'
+      AND wt.created_at > fgs.first_spent_at
+),
+first_add AS (SELECT guide_id, user_id FROM adds_after WHERE add_num = 1),
+second_add AS (SELECT guide_id, user_id FROM adds_after WHERE add_num = 2)
+SELECT
+    gp.id as guide_id,
+    gp.full_name as guide_name,
+    COUNT(DISTINCT fgs.user_id) as spoke_first_time,
+    COUNT(DISTINCT fa.user_id) as first_add,
+    COUNT(DISTINCT sa.user_id) as repeat_add,
+    ROUND(100.0 * COUNT(DISTINCT fa.user_id) / NULLIF(COUNT(DISTINCT fgs.user_id), 0), 1) as add_rate,
+    ROUND(100.0 * COUNT(DISTINCT sa.user_id) / NULLIF(COUNT(DISTINCT fa.user_id), 0), 1) as repeat_add_rate
+FROM guide.guide_profile gp
+LEFT JOIN first_guide_spent fgs ON gp.id = fgs.guide_id
+LEFT JOIN first_add fa ON fgs.guide_id = fa.guide_id AND fgs.user_id = fa.user_id
+LEFT JOIN second_add sa ON fgs.guide_id = sa.guide_id AND fgs.user_id = sa.user_id
+WHERE gp.deleted_at IS NULL
+  AND gp.full_name NOT IN ('Aman Jain', 'Praveen')
+GROUP BY gp.id, gp.full_name
+HAVING COUNT(DISTINCT fgs.user_id) > 0
+ORDER BY COUNT(DISTINCT fgs.user_id) DESC;
+"""
+
+# Guide Leakage Query - Customers who spoke to guide, recharged, then spoke to others
+GUIDE_LEAKAGE_QUERY = """
+WITH first_guide_spent AS (
+    SELECT
+        wo.consultant_id as guide_id,
+        wt.user_id,
+        MIN(wt.created_at) as first_spent_at
+    FROM wallet.wallet_transactions wt
+    JOIN wallet.wallet_orders wo ON wt.order_id = wo.order_id
+    WHERE wt.type = 'SPENT'
+      AND (wt.created_at + INTERVAL '5 hours 30 minutes')::date >= '2025-12-05'
+    GROUP BY wo.consultant_id, wt.user_id
+),
+add_after_guide AS (
+    SELECT
+        fgs.guide_id,
+        fgs.user_id,
+        MIN(wt.created_at) as first_add_after
+    FROM first_guide_spent fgs
+    JOIN wallet.wallet_transactions wt ON fgs.user_id = wt.user_id
+    WHERE wt.type = 'ADD'
+      AND wt.created_at > fgs.first_spent_at
+    GROUP BY fgs.guide_id, fgs.user_id
+),
+spoke_to_others AS (
+    SELECT DISTINCT
+        aag.guide_id as original_guide_id,
+        aag.user_id
+    FROM add_after_guide aag
+    JOIN wallet.wallet_transactions wt ON aag.user_id = wt.user_id
+    JOIN wallet.wallet_orders wo ON wt.order_id = wo.order_id
+    WHERE wt.type = 'SPENT'
+      AND wo.consultant_id != aag.guide_id
+      AND wt.created_at > aag.first_add_after
+),
+came_back AS (
+    SELECT DISTINCT
+        aag.guide_id as original_guide_id,
+        aag.user_id
+    FROM add_after_guide aag
+    JOIN wallet.wallet_transactions wt ON aag.user_id = wt.user_id
+    JOIN wallet.wallet_orders wo ON wt.order_id = wo.order_id
+    WHERE wt.type = 'SPENT'
+      AND wo.consultant_id = aag.guide_id
+      AND wt.created_at > aag.first_add_after
+)
+SELECT
+    gp.id as guide_id,
+    gp.full_name as guide_name,
+    COUNT(DISTINCT fgs.user_id) as spoke_first_time,
+    COUNT(DISTINCT aag.user_id) as recharged_after,
+    COUNT(DISTINCT cb.user_id) as came_back,
+    COUNT(DISTINCT sto.user_id) as leaked_to_others,
+    ROUND(100.0 * COUNT(DISTINCT aag.user_id) / NULLIF(COUNT(DISTINCT fgs.user_id), 0), 1) as recharge_rate,
+    ROUND(100.0 * COUNT(DISTINCT cb.user_id) / NULLIF(COUNT(DISTINCT aag.user_id), 0), 1) as retention_rate,
+    ROUND(100.0 * COUNT(DISTINCT sto.user_id) / NULLIF(COUNT(DISTINCT aag.user_id), 0), 1) as leakage_rate
+FROM guide.guide_profile gp
+LEFT JOIN first_guide_spent fgs ON gp.id = fgs.guide_id
+LEFT JOIN add_after_guide aag ON fgs.guide_id = aag.guide_id AND fgs.user_id = aag.user_id
+LEFT JOIN came_back cb ON aag.guide_id = cb.original_guide_id AND aag.user_id = cb.user_id
+LEFT JOIN spoke_to_others sto ON aag.guide_id = sto.original_guide_id AND aag.user_id = sto.user_id
+WHERE gp.deleted_at IS NULL
+  AND gp.full_name NOT IN ('Aman Jain', 'Praveen')
+GROUP BY gp.id, gp.full_name
+HAVING COUNT(DISTINCT fgs.user_id) > 0
+ORDER BY COUNT(DISTINCT aag.user_id) DESC;
+"""
+
 # Consultation Connection Performance (since Dec 5, 2025)
 # Analyzes how many attempts customers make before connecting to a guide
 CONSULTATION_PERFORMANCE_QUERY = """
