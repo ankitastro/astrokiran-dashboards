@@ -9,7 +9,7 @@ Terminal User Interface (TUI) dashboards for monitoring the AstroKiran platform.
 ## Running Dashboards
 
 ```bash
-source ../.venv/bin/activate
+source .venv/bin/activate
 
 # Main app (view framework)
 python app.py
@@ -17,6 +17,19 @@ python app.py
 # Legacy dashboards
 python guides_dashboard.py
 python wallet_dashboard.py
+```
+
+## Neo4j Sync
+
+```bash
+# Run full sync (clears and reimports all data)
+python neo4j_import.py
+
+# Incremental sync with ranking updates
+./run_sync.sh
+# or manually:
+python neo4j_sync.py
+python get_rankings.py --update
 ```
 
 **Keyboard Shortcuts:**
@@ -29,30 +42,33 @@ python wallet_dashboard.py
 ## Project Structure
 
 ```
-dashboards/
-├── app.py              # Main app using view framework
-├── db.py               # Stateless DB functions
-├── fmt.py              # Stateless formatting functions
-├── queries.py          # SQL queries (IST timezone adjusted)
-├── styles.py           # CSS styles
-├── get_rankings.py     # Neo4j guide ranking system
-├── neo4j_sync.py       # PostgreSQL → Neo4j incremental sync
+├── app.py                  # Main TUI app using view framework
+├── db.py                   # Stateless DB functions
+├── fmt.py                  # Stateless formatting functions
+├── queries.py              # SQL queries (IST timezone adjusted)
+├── styles.py               # CSS styles
+├── get_rankings.py         # Guide ranking (Neo4j)
+├── get_rankings_pg.py      # Guide ranking (PostgreSQL - real-time)
+├── ranking.sql             # Pure SQL ranking query
+├── neo4j_import.py         # Full Neo4j import (clears DB first)
+├── neo4j_sync.py           # Incremental Neo4j sync
+├── run_sync.sh             # Sync script for cron
 ├── components/
-│   └── date_range.py   # Date range picker component
+│   └── date_range.py       # Reusable date range component
 └── views/
-    ├── base.py         # BaseView protocol
-    ├── registry.py     # ViewRegistry
-    ├── wallet.py       # Wallet dashboard view
-    ├── payments.py     # Payments view
-    ├── revenue.py      # Revenue view
-    ├── users.py        # Users view
-    ├── consultations.py # Consultations view
-    ├── guides.py       # Guides view
+    ├── base.py             # BaseView protocol
+    ├── registry.py         # ViewRegistry
+    ├── wallet.py           # Wallet dashboard view
+    ├── payments.py         # Payments view
+    ├── revenue.py          # Revenue view
+    ├── users.py            # Users view
+    ├── consultations.py    # Consultations view
+    ├── guides.py           # Guides view
     ├── astrologer_availability.py
     ├── astrologer_performance.py
-    ├── meta.py         # Meta Ads view
-    ├── meta_campaigns.py
-    └── meta_totals.py
+    ├── meta.py             # Meta Ads view
+    ├── meta_campaigns.py   # Meta campaign breakdown
+    └── meta_totals.py      # Meta totals view
 ```
 
 ## View Framework
@@ -153,10 +169,21 @@ class BaseView(ABC):
 `.env` file in project root:
 
 ```
+# PostgreSQL
 DB_ENDPOINT=<RDS endpoint>
 DB_PORT=5432
 DB_USERNAME=<username>
 DB_PASSWORD=<password>
+
+# Neo4j (optional, for graph sync)
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=<password>
+
+# Superset (optional)
+SUPERSET_URL=<url>
+SUPERSET_USERNAME=<username>
+SUPERSET_PASSWORD=<password>
 ```
 
 ## CSS Theming
@@ -249,6 +276,14 @@ DB_PRIMARY_NAME=astrokiran
 WHERE (created_at + INTERVAL '5 hours 30 minutes')::date = (NOW() + INTERVAL '5 hours 30 minutes')::date
 ```
 
+## Neo4j Graph Model
+
+See `neo4j_domain_model.md` for full domain model documentation. Key entities:
+
+- **Nodes**: Customer, Guide, Consultation, Payment, WalletOrder, Offer
+- **Key relationships**: Customer→BOOKED→Consultation→WITH_GUIDE→Guide
+- **ID matching**: `Customer.customer_id` = `UserWallet.user_id`, `Guide.id` = `ConsultantWallet.consultant_id`
+
 ## Superset Integration
 
 See `SUPERSET_API.md` for REST API documentation. Key endpoints:
@@ -256,5 +291,3 @@ See `SUPERSET_API.md` for REST API documentation. Key endpoints:
 - CSRF: `GET /api/v1/security/csrf_token/`
 - Datasets: `POST /api/v1/dataset/`
 - Charts: `POST /api/v1/chart/`
-
-Superset credentials are in `.env` (SUPERSET_URL, SUPERSET_USERNAME, SUPERSET_PASSWORD).

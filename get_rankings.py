@@ -174,17 +174,30 @@ WITH g, completed, median_order_value, days_active,
           ELSE 1.0
      END as activity_multiplier
 
-WITH g, completed, median_order_value, weighted_score, activity_multiplier, repeat_rate, avg_order_value,
+WITH g, completed, median_order_value, days_active, weighted_score, activity_multiplier,
+     repeat_rate as repeat_score, aov_score, volume_score, activity_score, rating_normalized,
+     response_score, consistency_score, reliability_score, experience_score,
+     unique_customers, total_bookings, avg_order_value,
      round(weighted_score * activity_multiplier * 10 * 100) / 100 as ranking
 
 RETURN g.id as id,
        g.full_name as name,
        ranking,
+       activity_multiplier,
+       repeat_score,
+       aov_score,
+       volume_score,
+       activity_score,
+       rating_normalized as rating_score,
+       response_score,
+       consistency_score,
+       reliability_score,
+       experience_score,
        completed as total_consultations,
-       round(repeat_rate * 100) as repeat_pct,
-       round(avg_order_value) as aov,
-       round(median_order_value) as median_ov,
-       g.days_active_30d as activity
+       unique_customers,
+       total_bookings,
+       avg_order_value,
+       days_active
 ORDER BY ranking DESC
 '''
 
@@ -203,16 +216,16 @@ def get_rankings():
 
 def print_table(rankings):
     """Print rankings as a table."""
-    print("=" * 115)
-    print(f"{'Rank':<5} {'Guide':<20} {'Score':>6} {'Consults':>9} {'Repeat%':>8} {'Avg OV':>8} {'Med OV':>8} {'Active':>8}")
-    print("=" * 115)
+    print("=" * 105)
+    print(f"{'Rank':<5} {'Guide':<20} {'Score':>6} {'Consults':>9} {'Repeat%':>8} {'Avg OV':>8} {'Active':>8}")
+    print("=" * 105)
     for i, r in enumerate(rankings, 1):
         consults = r['total_consultations'] or 0
-        aov = f"₹{r['aov']:.0f}" if r['aov'] else "₹0"
-        median = f"₹{r['median_ov']:.0f}" if r['median_ov'] else "₹0"
-        activity = f"{r['activity']}d" if r['activity'] else "0d"
-        print(f"{i:<5} {r['name']:<20} {r['ranking']:>6.2f} {consults:>9} {r['repeat_pct'] or 0:>7}% {aov:>8} {median:>8} {activity:>8}")
-    print("=" * 115)
+        repeat_pct = (r.get('repeat_score') or 0) * 100
+        aov = f"₹{r['avg_order_value']:.0f}" if r.get('avg_order_value') else "₹0"
+        activity = f"{r['days_active']}d" if r.get('days_active') else "0d"
+        print(f"{i:<5} {r['name']:<20} {r['ranking']:>6.2f} {consults:>9} {repeat_pct:>7.0f}% {aov:>8} {activity:>8}")
+    print("=" * 105)
 
 
 def print_sql(rankings):
@@ -231,14 +244,59 @@ def print_sql(rankings):
     print(f"WHERE id IN ({', '.join(ids)});")
 
 
+def save_ranking_history(cur, rankings):
+    """Insert ranking history records."""
+    if not rankings:
+        return 0
+
+    values = []
+    for r in rankings:
+        values.append(f"""(
+            {r['id']},
+            {r['ranking']:.2f},
+            {r.get('activity_multiplier') or 1.0:.2f},
+            {r.get('repeat_score') or 0:.3f},
+            {r.get('aov_score') or 0:.3f},
+            {r.get('volume_score') or 0:.3f},
+            {r.get('activity_score') or 0:.3f},
+            {r.get('rating_score') or 0:.3f},
+            {r.get('response_score') or 0:.3f},
+            {r.get('consistency_score') or 0:.3f},
+            {r.get('reliability_score') or 0:.3f},
+            {r.get('experience_score') or 0:.3f},
+            {r.get('total_consultations') or 0},
+            {r.get('unique_customers') or 0},
+            {r.get('total_bookings') or 0},
+            {r.get('avg_order_value') or 0:.2f},
+            {r.get('days_active') or 0}
+        )""")
+
+    sql = f"""
+    INSERT INTO guide.ranking_history (
+        guide_id, ranking_score, activity_multiplier,
+        repeat_score, aov_score, volume_score, activity_score,
+        rating_score, response_score, consistency_score,
+        reliability_score, experience_score,
+        total_consultations, unique_customers, total_bookings,
+        avg_order_value, days_active
+    ) VALUES {', '.join(values)}
+    """
+    cur.execute(sql)
+    return cur.rowcount
+
+
 def update_rankings_in_db(rankings):
-    """Update ranking_score in PostgreSQL database."""
+    """Update ranking_score in PostgreSQL and save history."""
     if not rankings:
         print("No rankings to update")
         return
 
     conn = psycopg2.connect(**PG_PRIMARY_CONFIG)
     cur = conn.cursor()
+
+    # Save history first
+    history_count = save_ranking_history(cur, rankings)
+    print(f"Saved {history_count} ranking history records")
 
     # Build the CASE statement
     case_parts = [f"WHEN {r['id']} THEN {r['ranking']:.2f}" for r in rankings]
